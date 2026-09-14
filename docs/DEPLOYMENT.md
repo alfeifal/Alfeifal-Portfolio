@@ -10,7 +10,9 @@ managed Postgres, `DEFAULT_TIMEZONE`, `DEFAULT_CURRENCY`.
 1. Create the database, set `DATABASE_URL` (+ `DATABASE_SSL=true`).
 2. Import the repo in Vercel; build command `pnpm build`; add the env vars.
 3. Run migrations once from your machine or CI: `DATABASE_URL=… pnpm db:migrate`
-   (migrations are plain SQL in `./drizzle`, reviewed in git).
+   (migrations are plain SQL in `./drizzle`, reviewed in git). If outbound port 5432 is blocked
+   where you run it (some sandboxes/CI runners), use Neon's HTTPS endpoint instead:
+   `pnpm db:migrate --http`.
 4. `vercel.json` schedules `POST /api/cron` hourly — set `CRON_SECRET` in Vercel (Vercel sends it
    automatically as the bearer token for cron invocations).
 5. Open `/setup` once to create the owner account. Then leave `ALLOW_SIGNUP` unset.

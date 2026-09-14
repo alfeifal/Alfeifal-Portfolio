@@ -36,7 +36,7 @@ a paper trading account and an empty watchlist. No fake activity data is ever in
 |---|---|
 | `pnpm dev` / `pnpm build` / `pnpm start` | Next.js |
 | `pnpm typecheck` · `pnpm lint` · `pnpm test` | Checks (tests use `TEST_DATABASE_URL`) |
-| `pnpm db:generate` · `pnpm db:migrate` · `pnpm db:studio` | Drizzle migrations / studio |
+| `pnpm db:generate` · `pnpm db:migrate [--test|--http]` · `pnpm db:studio` | Drizzle migrations (`--http` = Neon over HTTPS) / studio |
 | `pnpm db:seed <email>` | Re-seed the routine for a user (idempotent) |
 | `pnpm backup` | `pg_dump` to `backups/` (see `scripts/backup.sh`) |
 | `pnpm check` | typecheck + lint + test + build |
