@@ -25,7 +25,7 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  serverExternalPackages: ["pg"],
+  serverExternalPackages: ["pg", "@neondatabase/serverless"],
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },

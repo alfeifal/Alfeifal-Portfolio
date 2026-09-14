@@ -4,7 +4,9 @@
 See `.env.example`. Required: `DATABASE_URL`, `AUTH_SECRET`. Optional: `ANTHROPIC_API_KEY`
 (assistant, reviews, briefs, tutor), `ANTHROPIC_MODEL`, `FINNHUB_API_KEY` (realtime quotes),
 `EXTRA_NEWS_FEEDS`, `ALLOW_SIGNUP`, `ALLOWED_ORIGINS`, `CRON_SECRET`, `DATABASE_SSL=true` for
-managed Postgres, `DEFAULT_TIMEZONE`, `DEFAULT_CURRENCY`.
+managed Postgres, `DATABASE_DRIVER=neon` to talk to Neon over WebSocket/443 instead of TCP 5432
+(needed only where 5432 is blocked; Vercel/Docker can keep the default `pg`), `DEFAULT_TIMEZONE`,
+`DEFAULT_CURRENCY`.
 
 ## Vercel + managed PostgreSQL (Neon / Supabase / RDS)
 1. Create the database, set `DATABASE_URL` (+ `DATABASE_SSL=true`).
