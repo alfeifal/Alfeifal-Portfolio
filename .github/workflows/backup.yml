@@ -1,0 +1,16 @@
+name: Database backup
+on:
+  schedule:
+    - cron: "0 3 * * *" # daily 03:00 UTC
+  workflow_dispatch:
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    # Requires the DATABASE_URL secret (production database). Artifacts are kept 30 days (encrypted at rest by GitHub).
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: ./scripts/backup.sh backups
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+      - uses: actions/upload-artifact@v4
+        with: { name: personal-os-backup, path: backups/, retention-days: 30 }

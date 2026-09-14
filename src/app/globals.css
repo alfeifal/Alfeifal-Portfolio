@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 247 247 245;
+  --surface: 255 255 255;
+  --surface-2: 241 241 238;
+  --border: 226 226 221;
+  --fg: 24 24 27;
+  --muted: 107 111 123;
+  --accent: 30 41 59;
+  --accent-fg: 255 255 255;
+  --positive: 22 128 84;
+  --negative: 190 52 40;
+  --warning: 196 128 20;
+  color-scheme: light;
+}
+.dark {
+  --bg: 17 18 22;
+  --surface: 26 28 34;
+  --surface-2: 34 37 45;
+  --border: 46 50 60;
+  --fg: 236 237 232;
+  --muted: 155 160 174;
+  --accent: 226 232 240;
+  --accent-fg: 17 18 22;
+  --positive: 52 190 128;
+  --negative: 235 96 80;
+  --warning: 230 170 60;
+  color-scheme: dark;
+}
+html { -webkit-text-size-adjust: 100%; height: 100%; }
+body { @apply bg-bg text-fg antialiased; min-height: 100%; font-feature-settings: "cv05", "ss01", "tnum"; }
+* { -webkit-tap-highlight-color: transparent; }
+*:focus-visible { outline: 2px solid rgb(var(--accent)); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+.safe-b { padding-bottom: env(safe-area-inset-bottom); }
+.safe-t { padding-top: env(safe-area-inset-top); }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* ---- Base primitives ---- */
+.card { @apply rounded-2xl border border-border bg-surface; }
+.field { @apply w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-[16px] text-fg outline-none placeholder:text-muted/70 focus:border-accent focus:ring-2 focus:ring-accent/15 disabled:opacity-50; }
+.btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40; }
+.btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40 bg-accent text-accent-fg hover:opacity-90; }
+.btn-ghost { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40 border border-border bg-transparent hover:bg-surface-2; }
+.btn-danger { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40 bg-negative text-white hover:opacity-90; }
+.btn-sm { @apply !px-3 !py-1.5 !text-xs; }
+.pill { @apply inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-0.5 text-xs font-medium text-fg; }
+.h1 { @apply text-2xl font-semibold tracking-tight; }
+.h2 { @apply text-lg font-semibold tracking-tight; }
+.muted { @apply text-muted; }
+.link { @apply underline decoration-muted/50 underline-offset-2 hover:decoration-fg; }
+.prose-sm p { @apply mb-2 leading-relaxed; }
+.prose-sm ul { @apply mb-2 ml-4 list-disc space-y-1; }
+.prose-sm ol { @apply mb-2 ml-4 list-decimal space-y-1; }
+.prose-sm h1, .prose-sm h2, .prose-sm h3 { @apply mb-1 mt-3 font-semibold; }
+.prose-sm strong { @apply font-semibold; }
+.prose-sm code { @apply rounded bg-surface-2 px-1 py-0.5 text-[0.9em]; }
+.prose-sm table { @apply mb-2 w-full text-sm; }
+.prose-sm td, .prose-sm th { @apply border border-border px-2 py-1 text-left; }
+
+/* ---- German module (original styles, scoped so they don't leak into the OS) ---- */
+.german-app { font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; }
+.german-app .card { @apply rounded-2xl border border-line bg-white; }
+.dark .german-app .card { background: #1D2028; border-color: #2A2E38; }
+.german-app .sub { @apply rounded-xl border border-line bg-paper; }
+.dark .german-app .sub { background: #1D2028; border-color: #2A2E38; }
+.german-app .muted { @apply text-[#6B6F7B]; }
+.dark .german-app .muted { color: #9BA0AE; }
+.german-app .pill { @apply inline-flex items-center gap-1 rounded-full bg-[#ECEDE8] px-2.5 py-0.5 text-xs font-medium text-ink; }
+.dark .german-app .pill { background: #262A34; color: #ECEDE8; }
+.german-app .field { @apply w-full rounded-xl border border-line bg-white px-3 py-2.5 text-[16px] text-ink outline-none focus:border-primary focus:ring-2 focus:ring-primary/20; }
+.dark .german-app .field { background: #14161C; border-color: #3A3F4B; color: #ECEDE8; }
+.german-app .btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40; }
+.german-app .btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40 bg-primary text-white hover:bg-primary-deep; }
+.german-app .btn-ghost { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40 border border-line bg-transparent hover:bg-black/5; }
+.dark .german-app .btn-ghost { @apply hover:bg-white/10; }
+.german-app .btn-good { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40 bg-good text-white; }
+.german-app .btn-bad { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40 bg-bad text-white; }
+.german-app .tab { @apply rounded-full px-3 py-1.5 text-sm font-medium whitespace-nowrap; }
+.german-app .tab-active { @apply bg-ink text-white; }
+.dark .german-app .tab-active { background: #ECEDE8; color: #14161C; }
+.german-app .h1 { @apply text-2xl font-semibold tracking-tight; }
+.german-app .h2 { @apply text-lg font-semibold tracking-tight; }
+.german-app .md p { @apply mb-3 leading-relaxed; }
+.german-app .md ul { @apply mb-3 ml-4 list-disc space-y-1; }
+.german-app .md table { @apply mb-3 w-full border-collapse text-sm; }
+.german-app .md td { @apply border border-line px-2 py-1.5 align-top; }
+.dark .german-app .md td { border-color: #2A2E38; }
+.german-app .md tr:first-child td { @apply font-semibold; }
+.german-app .md em { @apply font-medium not-italic text-primary; }
+.dark .german-app .md em { color: #8FA0FF; }
+.german-app .md strong { @apply font-semibold; }
+.german-app { color: #1B1D24; }
+.dark .german-app { color: #ECEDE8; }

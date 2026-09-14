@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+html { -webkit-text-size-adjust: 100%; }
+body { @apply bg-paper text-ink antialiased; font-feature-settings: "ss01", "cv05"; }
+.dark body { background: #14161C; color: #ECEDE8; }
+.dark .card { background: #1D2028; border-color: #2A2E38; }
+.dark .muted { color: #9BA0AE; }
+.dark .field { background: #14161C; border-color: #3A3F4B; color: #ECEDE8; }
+.dark .tab-active { background: #ECEDE8; color: #14161C; }
+.dark .sub { background: #1D2028; border-color: #2A2E38; }
+.dark .pill { background: #262A34; }
+
+.card { @apply bg-white border border-line rounded-2xl; }
+.sub { @apply bg-paper border border-line rounded-xl; }
+.muted { @apply text-[#6B6F7B]; }
+.pill { @apply inline-flex items-center gap-1 rounded-full bg-[#ECEDE8] px-2.5 py-0.5 text-xs font-medium; }
+.field { @apply w-full rounded-xl border border-line bg-white px-3 py-2.5 text-[16px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20; }
+.btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none; }
+.btn-primary { @apply btn bg-primary text-white hover:bg-primary-deep; }
+.btn-ghost { @apply btn border border-line bg-transparent hover:bg-black/5; }
+.btn-good { @apply btn bg-good text-white; }
+.btn-bad { @apply btn bg-bad text-white; }
+.tab { @apply rounded-full px-3 py-1.5 text-sm font-medium whitespace-nowrap; }
+.tab-active { @apply bg-ink text-white; }
+.h1 { @apply text-2xl font-semibold tracking-tight; }
+.h2 { @apply text-lg font-semibold tracking-tight; }
+*:focus-visible { outline: 2px solid #2F4BD6; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+.md p { @apply mb-3 leading-relaxed; }
+.md ul { @apply mb-3 ml-4 list-disc space-y-1; }
+.md table { @apply mb-3 w-full text-sm border-collapse; }
+.md td { @apply border border-line px-2 py-1.5 align-top; }
+.dark .md td { border-color: #2A2E38; }
+.md tr:first-child td { @apply font-semibold; }
+.md em { @apply not-italic font-medium text-primary; }
+.dark .md em { color: #8FA0FF; }
+.md strong { @apply font-semibold; }
+.safe-b { padding-bottom: env(safe-area-inset-bottom); }
