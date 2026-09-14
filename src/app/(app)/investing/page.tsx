@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
-import { Badge, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Stat, Tabs, Source } from "@/components/ui";
+import { useToast } from "@/components/toast";
+import { Badge, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Stat, Tabs, Source, Button, SkeletonStats, useConfirm } from "@/components/ui";
 import { api, fmtDate, fmtMoney, fmtNum, todayLocal, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 import { MiniLine } from "@/components/charts";
@@ -11,6 +12,9 @@ interface Asset { id: string; symbol: string; name: string; assetClass: string; 
 
 export default function InvestingPage() {
   const { user } = useShell();
+  const toast = useToast();
+  const { confirm, dialog } = useConfirm();
+  const [saving, setSaving] = useState(false);
   const cur = user.currency;
   const [tab, setTab] = useState<"portfolio" | "transactions" | "assets">("portfolio");
   const [refresh, setRefresh] = useState(0);
@@ -22,13 +26,14 @@ export default function InvestingPage() {
   const [error, setError] = useState("");
   const all = () => { p.refresh(); txs.refresh(); assets.refresh(); };
   const submit = async (e: React.FormEvent) => {
-    e.preventDefault(); setError("");
+    e.preventDefault(); setError(""); setSaving(true);
     try {
       if (modal === "tx") await api("/api/investing/transactions", { method: "POST", json: { accountId: form.accountId, assetId: form.assetId || null, type: form.type, date: form.date, quantity: form.quantity ? Number(form.quantity) : null, price: form.price ? Number(form.price) : null, amount: form.amount ? Number(form.amount) : undefined, fees: Number(form.fees || 0), notes: form.notes || null } });
       if (modal === "asset") await api("/api/investing/assets", { method: "POST", json: { symbol: form.symbol, name: form.name, assetClass: form.assetClass ?? "etf", currency: form.currency || "EUR", providerSymbols: form.stooq ? { stooq: form.stooq } : {}, manualPrice: form.manualPrice ? Number(form.manualPrice) : null } });
       if (modal === "account") await api("/api/investing/accounts", { method: "POST", json: { name: form.name, broker: form.broker || null, currency: "EUR", cashBalance: Number(form.cashBalance || 0) } });
+      toast.success(modal === "tx" ? "Transaction recorded" : modal === "asset" ? "Asset added" : "Account created");
       setModal(null); setForm({}); all();
-    } catch (err) { setError((err as Error).message); }
+    } catch (err) { setError((err as Error).message); } finally { setSaving(false); }
   };
   const d = p.data;
   return (
@@ -36,13 +41,13 @@ export default function InvestingPage() {
       <PageHeader title="Investing" subtitle="Long-term portfolio. Separate from active trading." action={<><button className="btn-ghost btn-sm" onClick={() => setRefresh((n) => n + 1)} disabled={p.loading}>Refresh prices</button><button className="btn-primary btn-sm" onClick={() => { setForm({ type: "buy", date: todayLocal(), accountId: d?.accounts[0]?.id ?? "" }); setModal("tx"); }}>+ Transaction</button></>} />
       <Tabs value={tab} onChange={setTab} options={[{ value: "portfolio", label: "Portfolio" }, { value: "transactions", label: "Transactions" }, { value: "assets", label: "Assets & accounts" }]} />
       {p.error && <ErrorBox error={p.error} retry={p.reload} />}
-      {p.loading && !d && <Spinner />}
+      {p.loading && !d && <SkeletonStats />}
       {d && tab === "portfolio" && (
         <>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            <Stat label="Total value" value={fmtMoney(d.totalValue + d.cash, cur)} sub={`incl. cash ${fmtMoney(d.cash, cur)}`} />
-            <Stat label="Cost basis" value={fmtMoney(d.totalCost, cur)} sub={`net contributions ${fmtMoney(d.netContributions, cur)}`} />
-            <Stat label="Unrealized" value={fmtMoney(d.unrealized, cur)} tone={d.unrealized >= 0 ? "positive" : "negative"} sub={d.unpriced.length ? `${d.unpriced.length} position(s) without price` : "priced positions"} />
+            <Stat label="Total value" count={d.totalValue + d.cash} format={(v) => fmtMoney(v, cur)} sub={`incl. cash ${fmtMoney(d.cash, cur)}`} />
+            <Stat label="Cost basis" count={d.totalCost} format={(v) => fmtMoney(v, cur)} sub={`net contributions ${fmtMoney(d.netContributions, cur)}`} />
+            <Stat label="Unrealized" count={d.unrealized} format={(v) => fmtMoney(v, cur)} tone={d.unrealized >= 0 ? "positive" : "negative"} sub={d.unpriced.length ? `${d.unpriced.length} position(s) without price` : "priced positions"} />
             <Stat label="Positions" value={d.positions.filter((x) => x.quantity > 0).length} sub={`${d.accounts.length} accounts`} />
           </div>
           {d.accounts.length === 0 && <Empty>Create an investment account first.<button className="btn-ghost btn-sm ml-2" onClick={() => { setForm({}); setModal("account"); }}>+ Account</button></Empty>}
@@ -60,11 +65,11 @@ export default function InvestingPage() {
           </div>
         </>
       )}
-      {tab === "transactions" && (txs.loading && !txs.data ? <Spinner /> : !txs.data?.length ? <Empty>No investment transactions.</Empty> : <ul className="card divide-y divide-border">{txs.data.map((t) => <li key={t.id} className="flex items-center gap-3 px-3 py-2 text-sm"><span className="w-12 text-xs muted">{fmtDate(t.date)}</span><span className="flex-1"><Badge tone={t.type === "buy" || t.type === "contribution" ? "positive" : t.type === "sell" || t.type === "withdrawal" ? "warning" : "muted"}>{t.type}</Badge> {t.symbol ?? ""} {t.quantity ? `${fmtNum(t.quantity, 4)} @ ${fmtNum(t.price ?? 0, 2)}` : ""}<span className="ml-1 text-xs muted">{t.accountName}</span> <Source source={t.source === "ai" ? "ai" : null} /></span><span className="tnum">{fmtMoney(t.amount, cur)}</span><button className="btn-ghost btn-sm" onClick={async () => { if (confirm("Delete transaction?")) { await api(`/api/investing/transactions/${t.id}`, { method: "DELETE" }); all(); } }}>✕</button></li>)}</ul>)}
+      {tab === "transactions" && (txs.loading && !txs.data ? <Spinner /> : !txs.data?.length ? <Empty>No investment transactions.</Empty> : <ul className="card divide-y divide-border">{txs.data.map((t) => <li key={t.id} className="flex items-center gap-3 px-3 py-2 text-sm"><span className="w-12 text-xs muted">{fmtDate(t.date)}</span><span className="flex-1"><Badge tone={t.type === "buy" || t.type === "contribution" ? "positive" : t.type === "sell" || t.type === "withdrawal" ? "warning" : "muted"}>{t.type}</Badge> {t.symbol ?? ""} {t.quantity ? `${fmtNum(t.quantity, 4)} @ ${fmtNum(t.price ?? 0, 2)}` : ""}<span className="ml-1 text-xs muted">{t.accountName}</span> <Source source={t.source === "ai" ? "ai" : null} /></span><span className="tnum">{fmtMoney(t.amount, cur)}</span><button className="btn-ghost btn-sm" onClick={() => confirm(async () => { await api(`/api/investing/transactions/${t.id}`, { method: "DELETE" }); toast.success("Transaction deleted"); all(); }, { title: "Delete transaction?" })}>✕</button></li>)}</ul>)}
       {tab === "assets" && (
         <div className="grid gap-3 md:grid-cols-2">
-          <Card title="Assets" action={<button className="btn-primary btn-sm" onClick={() => { setForm({ assetClass: "etf", currency: "EUR" }); setModal("asset"); }}>+ Asset</button>}>{!assets.data?.length ? <p className="text-sm muted">Add ETFs, stocks, commodities…</p> : <ul className="divide-y divide-border text-sm">{assets.data.map((a) => <li key={a.id} className="flex items-center gap-2 py-2"><span className="flex-1"><span className="font-medium">{a.symbol}</span> {a.name} <Badge>{a.assetClass}</Badge>{a.providerSymbols.stooq && <span className="text-xs muted"> · stooq {a.providerSymbols.stooq}</span>}{a.manualPrice != null && <span className="text-xs muted"> · manual {a.manualPrice}</span>}</span><button className="btn-ghost btn-sm" onClick={async () => { const v = prompt("Manual price (empty to clear)", a.manualPrice?.toString() ?? ""); if (v == null) return; await api(`/api/investing/assets/${a.id}`, { method: "PATCH", json: { manualPrice: v ? Number(v) : null } }); all(); }}>price</button><button className="btn-ghost btn-sm" onClick={async () => { if (confirm("Delete asset?")) { await api(`/api/investing/assets/${a.id}`, { method: "DELETE" }); all(); } }}>✕</button></li>)}</ul>}</Card>
-          <Card title="Accounts" action={<button className="btn-primary btn-sm" onClick={() => { setForm({}); setModal("account"); }}>+ Account</button>}>{!d?.accounts.length ? <p className="text-sm muted">No investment accounts.</p> : <ul className="divide-y divide-border text-sm">{d.accounts.map((a) => <li key={a.id} className="flex items-center gap-2 py-2"><span className="flex-1">{a.name}{a.broker && <span className="muted"> · {a.broker}</span>}</span><span className="tnum">cash {fmtMoney(a.cashBalance, cur)}</span><button className="btn-ghost btn-sm" onClick={async () => { if (confirm("Delete account and its transactions?")) { await api(`/api/investing/accounts/${a.id}`, { method: "DELETE" }); all(); } }}>✕</button></li>)}</ul>}</Card>
+          <Card title="Assets" action={<button className="btn-primary btn-sm" onClick={() => { setForm({ assetClass: "etf", currency: "EUR" }); setModal("asset"); }}>+ Asset</button>}>{!assets.data?.length ? <p className="text-sm muted">Add ETFs, stocks, commodities…</p> : <ul className="divide-y divide-border text-sm">{assets.data.map((a) => <li key={a.id} className="flex items-center gap-2 py-2"><span className="flex-1"><span className="font-medium">{a.symbol}</span> {a.name} <Badge>{a.assetClass}</Badge>{a.providerSymbols.stooq && <span className="text-xs muted"> · stooq {a.providerSymbols.stooq}</span>}{a.manualPrice != null && <span className="text-xs muted"> · manual {a.manualPrice}</span>}</span><button className="btn-ghost btn-sm" onClick={async () => { const v = prompt("Manual price (empty to clear)", a.manualPrice?.toString() ?? ""); if (v == null) return; await api(`/api/investing/assets/${a.id}`, { method: "PATCH", json: { manualPrice: v ? Number(v) : null } }); all(); }}>price</button><button className="btn-ghost btn-sm" onClick={() => confirm(async () => { await api(`/api/investing/assets/${a.id}`, { method: "DELETE" }); toast.success("Asset deleted"); all(); }, { title: "Delete asset?", description: a.symbol })}>✕</button></li>)}</ul>}</Card>
+          <Card title="Accounts" action={<button className="btn-primary btn-sm" onClick={() => { setForm({}); setModal("account"); }}>+ Account</button>}>{!d?.accounts.length ? <p className="text-sm muted">No investment accounts.</p> : <ul className="divide-y divide-border text-sm">{d.accounts.map((a) => <li key={a.id} className="flex items-center gap-2 py-2"><span className="flex-1">{a.name}{a.broker && <span className="muted"> · {a.broker}</span>}</span><span className="tnum">cash {fmtMoney(a.cashBalance, cur)}</span><button className="btn-ghost btn-sm" onClick={() => confirm(async () => { await api(`/api/investing/accounts/${a.id}`, { method: "DELETE" }); toast.success("Account deleted"); all(); }, { title: "Delete account and its transactions?", description: a.name })}>✕</button></li>)}</ul>}</Card>
         </div>
       )}
       <Modal open={modal !== null} onClose={() => setModal(null)} title={modal === "tx" ? "Investment transaction" : modal === "asset" ? "New asset" : "New investment account"}>
@@ -78,9 +83,10 @@ export default function InvestingPage() {
           {modal === "asset" && <><div className="grid grid-cols-2 gap-2"><Field label="Symbol"><input className="field" required autoFocus value={form.symbol ?? ""} onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })} /></Field><Field label="Class"><select className="field" value={form.assetClass} onChange={(e) => setForm({ ...form, assetClass: e.target.value })}>{["etf", "stock", "bond", "commodity", "crypto", "fund", "cash", "real_estate", "other"].map((t) => <option key={t}>{t}</option>)}</select></Field></div><Field label="Name"><input className="field" required value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field><div className="grid grid-cols-2 gap-2"><Field label="Stooq symbol" hint="e.g. vwce.de, aapl.us, xauusd"><input className="field" value={form.stooq ?? ""} onChange={(e) => setForm({ ...form, stooq: e.target.value })} /></Field><Field label="Manual price" hint="Used when no provider price"><input className="field" type="number" step="any" value={form.manualPrice ?? ""} onChange={(e) => setForm({ ...form, manualPrice: e.target.value })} /></Field></div></>}
           {modal === "account" && <><Field label="Name"><input className="field" required autoFocus value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field><div className="grid grid-cols-2 gap-2"><Field label="Broker"><input className="field" value={form.broker ?? ""} onChange={(e) => setForm({ ...form, broker: e.target.value })} /></Field><Field label="Cash balance"><input className="field" type="number" step="0.01" value={form.cashBalance ?? ""} onChange={(e) => setForm({ ...form, cashBalance: e.target.value })} /></Field></div></>}
           {error && <p className="text-sm text-negative">{error}</p>}
-          <div className="flex justify-end"><button className="btn-primary">Save</button></div>
+          <div className="flex justify-end"><Button variant="primary" type="submit" loading={saving}>Save</Button></div>
         </form>
       </Modal>
+      {dialog}
     </div>
   );
 }

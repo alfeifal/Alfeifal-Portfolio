@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
-import { Card, ErrorBox, PageHeader, Spinner, Stat, Tabs } from "@/components/ui";
+import { Card, ErrorBox, PageHeader, Stat, Tabs, SkeletonStats, SkeletonCards } from "@/components/ui";
+import { AnimatePresence, m } from "motion/react";
+import { T } from "@/components/motion";
 import { fmtMoney, fmtNum, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 import { MiniBars, MiniLine } from "@/components/charts";
@@ -31,13 +33,13 @@ export default function AnalyticsPage() {
       <PageHeader title="Analytics" subtitle={d ? `${d.range.from} → ${d.range.to} · compared with the previous ${period}` : "Trends across every module"} />
       <Tabs value={period} onChange={setPeriod} options={[{ value: "week", label: "7 days" }, { value: "month", label: "30 days" }, { value: "quarter", label: "90 days" }, { value: "year", label: "365 days" }]} />
       {a.error && <ErrorBox error={a.error} retry={a.reload} />}
-      {!d ? <Spinner /> : (
-        <>
+      {!d ? <><SkeletonStats /><div className="mt-3"><SkeletonCards n={4} /></div></> : (
+        <AnimatePresence mode="wait"><m.div key={period} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={T.enter} className="space-y-4">
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            <Stat label="Net cash flow" value={fmtMoney(d.finance.current.net, cur)} tone={d.finance.current.net >= 0 ? "positive" : "negative"} sub={delta(d.finance.current.net, d.finance.previous.net)} />
+            <Stat label="Net cash flow" count={d.finance.current.net} format={(v) => fmtMoney(v, cur)} tone={d.finance.current.net >= 0 ? "positive" : "negative"} sub={delta(d.finance.current.net, d.finance.previous.net)} />
             <Stat label="Training volume" value={`${fmtNum(d.training.current.volume / 1000, 1)} t`} sub={`${d.training.current.sessions} sessions · ${delta(d.training.current.volume, d.training.previous.volume)}`} />
-            <Stat label="Study time" value={`${d.studies.current.totalMinutes} min`} sub={delta(d.studies.current.totalMinutes, d.studies.previous.totalMinutes)} />
-            <Stat label="Tasks done" value={d.tasks.done} sub={`${d.tasks.open} open · ${d.tasks.overdue} overdue`} tone={d.tasks.overdue ? "warning" : undefined} />
+            <Stat label="Study time" count={d.studies.current.totalMinutes} format={(v) => `${Math.round(v)} min`} sub={delta(d.studies.current.totalMinutes, d.studies.previous.totalMinutes)} />
+            <Stat label="Tasks done" count={d.tasks.done} format={(v) => String(Math.round(v))} sub={`${d.tasks.open} open · ${d.tasks.overdue} overdue`} tone={d.tasks.overdue ? "warning" : undefined} />
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <Card title="Finance · income vs expenses (12 months)"><MiniBars series={d.finance.monthly.map((m) => ({ label: m.month.slice(2), a: m.income, b: m.expenses }))} labels={["Income", "Expenses"]} format={(v) => fmtMoney(v, cur)} /><p className="mt-1 text-xs muted">Savings rate this period: {d.finance.current.savingsRate ?? "n/a"}% · net worth {fmtMoney(d.finance.netWorth, cur)}</p></Card>
@@ -51,7 +53,7 @@ export default function AnalyticsPage() {
             <Card title="Nutrition"><p className="text-sm">Average over {d.nutrition.daysLogged} logged days: <span className="tnum font-medium">{fmtNum(d.nutrition.average.calories, 0)} kcal</span> · <span className="tnum font-medium">{fmtNum(d.nutrition.average.protein, 0)} g</span> protein (goals {d.nutrition.goals.calories} / {d.nutrition.goals.protein} g)</p></Card>
           </div>
           <p className="text-xs muted">All figures are calculated from your stored records; nothing here is estimated.</p>
-        </>
+        </m.div></AnimatePresence>
       )}
     </div>
   );

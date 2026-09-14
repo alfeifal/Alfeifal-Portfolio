@@ -2,6 +2,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/client";
+import { MotionProvider, FadeIn } from "@/components/motion";
+import { Button } from "@/components/ui";
 
 export default function SetupPage() {
   const router = useRouter();
@@ -17,7 +19,7 @@ export default function SetupPage() {
   };
   if (allowed === false) return <div className="card p-6 text-sm"><p className="font-semibold">Sign-up is closed</p><p className="muted">This is a private instance. Set ALLOW_SIGNUP=true on the server to allow more accounts.</p><a className="link mt-3 block" href="/login">Back to sign in</a></div>;
   return (
-    <form onSubmit={submit} className="card p-6">
+    <MotionProvider><FadeIn variant="scale"><form onSubmit={submit} className="card p-6 shadow-xl shadow-black/5">
       <h1 className="h1 mb-1">Set up your Personal OS</h1>
       <p className="mb-5 text-sm muted">Create the owner account. Your training routine, finance categories and German course are prepared automatically.</p>
       {(["name", "email", "password"] as const).map((k) => (
@@ -29,7 +31,7 @@ export default function SetupPage() {
       </div>
       <p className="mb-3 text-xs muted">Password: at least 10 characters.</p>
       {error && <p className="mb-3 text-sm text-negative">{error}</p>}
-      <button className="btn-primary w-full" disabled={busy}>{busy ? "Creating…" : "Create account"}</button>
-    </form>
+      <Button variant="primary" type="submit" className="w-full" loading={busy}>Create account</Button>
+    </form></FadeIn></MotionProvider>
   );
 }

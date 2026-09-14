@@ -1,7 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Badge, Card, Empty, ErrorBox, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Card, Empty, ErrorBox, PageHeader, Spinner, SkeletonList } from "@/components/ui";
+import { Bell } from "lucide-react";
+import { AnimatePresence, m } from "motion/react";
+import { T } from "@/components/motion";
 import { api, fmtDate, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 
@@ -21,8 +24,8 @@ export default function NotificationsPage() {
     <div className="space-y-4">
       <PageHeader title="Notifications" subtitle="Generated from your tasks, deadlines, events, exams, goals and price alerts." action={<button className="btn-ghost btn-sm" onClick={markAll}>Mark all read</button>} />
       {list.error && <ErrorBox error={list.error} retry={list.reload} />}
-      {!list.data ? <Spinner /> : list.data.items.length === 0 ? <Empty>Nothing to report.</Empty> : (
-        <ul className="card divide-y divide-border">{list.data.items.map((n) => <li key={n.id} className={"flex items-start gap-3 px-3 py-2.5 text-sm " + (n.readAt ? "opacity-60" : "")}><Badge>{n.kind}</Badge><div className="min-w-0 flex-1">{n.href ? <Link href={n.href} className="font-medium hover:underline" onClick={() => markOne(n.id)}>{n.title}</Link> : <p className="font-medium">{n.title}</p>}{n.body && <p className="text-xs muted">{n.body}</p>}<p className="text-[11px] muted">{fmtDate(n.createdAt, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</p></div>{!n.readAt && <button className="btn-ghost btn-sm" onClick={() => markOne(n.id)}>✓</button>}<button className="btn-ghost btn-sm" onClick={async () => { await api(`/api/notifications/${n.id}`, { method: "DELETE" }); list.refresh(); refreshUnread(); }}>✕</button></li>)}</ul>
+      {!list.data ? <SkeletonList rows={4} /> : list.data.items.length === 0 ? <Empty icon={<Bell size={18} />} title="Nothing to report">Reminders for tasks, deadlines, events, exams, goals and price alerts will show up here.</Empty> : (
+        <ul className="card divide-y divide-border overflow-hidden"><AnimatePresence initial={false}>{list.data.items.map((n) => <m.li key={n.id} layout="position" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0, x: 24 }} transition={T.enter} className={"row flex items-start gap-3 px-3 py-2.5 text-sm transition-opacity " + (n.readAt ? "opacity-60" : "")}><Badge>{n.kind}</Badge><div className="min-w-0 flex-1">{n.href ? <Link href={n.href} className="font-medium hover:underline" onClick={() => markOne(n.id)}>{n.title}</Link> : <p className="font-medium">{n.title}</p>}{n.body && <p className="text-xs muted">{n.body}</p>}<p className="text-[11px] muted">{fmtDate(n.createdAt, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</p></div>{!n.readAt && <button className="btn-ghost btn-sm" onClick={() => markOne(n.id)}>✓</button>}<button className="btn-ghost btn-sm" onClick={async () => { await api(`/api/notifications/${n.id}`, { method: "DELETE" }); list.refresh(); refreshUnread(); }}>✕</button></m.li>)}</AnimatePresence></ul>
       )}
       <Card title="Notification settings">
         {!s ? <Spinner /> : <div className="grid gap-2 sm:grid-cols-2">

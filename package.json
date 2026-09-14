@@ -26,6 +26,7 @@
     "fast-xml-parser": "^5.11.1",
     "idb-keyval": "^6.3.0",
     "lucide-react": "^1.45.0",
+    "motion": "^13.3.0",
     "next": "^16.3.5",
     "pg": "^8.23.0",
     "react": "^19.3.0",

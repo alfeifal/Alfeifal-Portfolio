@@ -1,7 +1,8 @@
 "use client";
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, Bar, Card, ErrorBox, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Bar, Card, ErrorBox, PageHeader, Spinner, useConfirm } from "@/components/ui";
+import { useToast } from "@/components/toast";
 import { api, fmtDate, useApi } from "@/lib/client";
 import type { Project, Task } from "@/lib/types";
 
@@ -10,17 +11,19 @@ interface Detail extends Project { tasks: Task[]; milestones: { id: string; titl
 export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const toast = useToast();
+  const { confirm, dialog } = useConfirm();
   const p = useApi<Detail>(`/api/projects/${id}`);
   const [task, setTask] = useState("");
   const [ms, setMs] = useState("");
   const [notes, setNotes] = useState<string | null>(null);
   const d = p.data;
-  const patch = async (json: Record<string, unknown>) => { await api(`/api/projects/${id}`, { method: "PATCH", json }); p.refresh(); };
+  const patch = async (json: Record<string, unknown>) => { await api(`/api/projects/${id}`, { method: "PATCH", json }); toast.success("Project updated"); p.refresh(); };
   if (p.error) return <ErrorBox error={p.error} retry={p.reload} />;
   if (!d) return <Spinner />;
   return (
     <div className="space-y-4">
-      <PageHeader back={{ href: "/projects", label: "Projects" }} title={d.name} subtitle={<><Badge>{d.kind}</Badge> {d.priority}{d.deadline && ` · deadline ${fmtDate(d.deadline)}`} · {d.computedProgress}%</>} action={<><select className="field !w-auto !py-1.5 text-sm" value={d.status} onChange={(e) => patch({ status: e.target.value })}>{["idea", "planning", "active", "on_hold", "completed", "archived"].map((s) => <option key={s}>{s}</option>)}</select><button className="btn-ghost btn-sm text-negative" onClick={async () => { if (confirm("Delete project? Tasks are kept without project.")) { await api(`/api/projects/${id}`, { method: "DELETE" }); router.push("/projects"); } }}>Delete</button></>} />
+      <PageHeader back={{ href: "/projects", label: "Projects" }} title={d.name} subtitle={<><Badge>{d.kind}</Badge> {d.priority}{d.deadline && ` · deadline ${fmtDate(d.deadline)}`} · {d.computedProgress}%</>} action={<><select className="field !w-auto !py-1.5 text-sm" value={d.status} onChange={(e) => patch({ status: e.target.value })}>{["idea", "planning", "active", "on_hold", "completed", "archived"].map((s) => <option key={s}>{s}</option>)}</select><button className="btn-ghost btn-sm text-negative" onClick={() => confirm(async () => { await api(`/api/projects/${id}`, { method: "DELETE" }); toast.success("Project deleted"); router.push("/projects"); }, { title: "Delete project?", description: "Its tasks are kept without a project." })}>Delete</button></>} />
       <Bar value={d.computedProgress / 100} h={8} />
       {d.description && <p className="text-sm muted">{d.description}</p>}
       <div className="grid gap-3 md:grid-cols-2">
@@ -38,6 +41,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
           </Card>
         </div>
       </div>
+      {dialog}
     </div>
   );
 }

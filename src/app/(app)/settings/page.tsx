@@ -2,7 +2,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Badge, Card, ErrorBox, Field, PageHeader, Spinner, Source } from "@/components/ui";
+import { Badge, Card, ErrorBox, Field, PageHeader, Spinner, Source, AsyncButton } from "@/components/ui";
+import { useToast } from "@/components/toast";
 import { api, fmtDate, useApi } from "@/lib/client";
 import { useTheme } from "@/components/theme";
 
@@ -13,6 +14,7 @@ const WIDGETS = ["today", "finance", "goals", "projects", "training", "studies",
 
 export default function SettingsPage() {
   const router = useRouter();
+  const toast = useToast();
   const me = useApi<Me>("/api/me");
   const memory = useApi<Memory[]>("/api/ai/memory");
   const actions = useApi<ActionLog[]>("/api/ai/actions?limit=50");
@@ -27,7 +29,7 @@ export default function SettingsPage() {
   const widgets = ((d?.preferences.dashboard as { widgets?: string[] } | undefined)?.widgets) ?? WIDGETS;
   const ai = (d?.preferences.ai as { confirmMedium?: boolean } | undefined) ?? {};
   const savePrefs = async (patch: Record<string, unknown>) => { await api("/api/me/preferences", { method: "PATCH", json: patch }); me.refresh(); };
-  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 3000); };
+  const flash = (m: string) => { setMsg(""); toast.success(m); };
   if (me.error) return <ErrorBox error={me.error} retry={me.reload} />;
   if (!d) return <Spinner />;
   return (
@@ -48,7 +50,7 @@ export default function SettingsPage() {
           <div className="flex flex-wrap gap-1.5">{WIDGETS.map((w) => <button key={w} className={"pill capitalize " + (widgets.includes(w) ? "!bg-accent !text-accent-fg" : "")} onClick={() => savePrefs({ dashboard: { widgets: widgets.includes(w) ? widgets.filter((x) => x !== w) : [...widgets, w] } })}>{w}</button>)}</div>
         </Card>
         <Card title="Security">
-          <form className="space-y-2" onSubmit={async (e) => { e.preventDefault(); try { await api("/api/me/password", { method: "POST", json: pw }); setPw({ currentPassword: "", newPassword: "" }); flash("Password changed; other sessions signed out"); } catch (err) { alert((err as Error).message); } }}>
+          <form className="space-y-2" onSubmit={async (e) => { e.preventDefault(); try { await api("/api/me/password", { method: "POST", json: pw }); setPw({ currentPassword: "", newPassword: "" }); flash("Password changed; other sessions signed out"); } catch (err) { toast.error("Password not changed", (err as Error).message); } }}>
             <Field label="Current password"><input className="field" type="password" autoComplete="current-password" required value={pw.currentPassword} onChange={(e) => setPw({ ...pw, currentPassword: e.target.value })} /></Field>
             <Field label="New password (10+ chars)"><input className="field" type="password" autoComplete="new-password" required minLength={10} value={pw.newPassword} onChange={(e) => setPw({ ...pw, newPassword: e.target.value })} /></Field>
             <div className="flex gap-2"><button className="btn-primary btn-sm">Change password</button><button type="button" className="btn-ghost btn-sm" onClick={async () => { await api("/api/me/sessions", { method: "DELETE" }); flash("Other devices signed out"); }}>Sign out other devices</button></div>

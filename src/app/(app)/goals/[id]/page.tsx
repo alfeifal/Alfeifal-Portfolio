@@ -2,7 +2,8 @@
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Badge, Bar, Card, ErrorBox, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Bar, Card, ErrorBox, PageHeader, Spinner, useConfirm } from "@/components/ui";
+import { useToast } from "@/components/toast";
 import { api, fmtDate, useApi } from "@/lib/client";
 import type { Goal, Task } from "@/lib/types";
 
@@ -11,16 +12,18 @@ interface GoalDetail extends Goal { description: string | null; milestones: { id
 export default function GoalPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const toast = useToast();
+  const { confirm, dialog } = useConfirm();
   const g = useApi<GoalDetail>(`/api/goals/${id}`);
   const [ms, setMs] = useState("");
   const [task, setTask] = useState("");
   const d = g.data;
-  const patch = async (json: Record<string, unknown>) => { await api(`/api/goals/${id}`, { method: "PATCH", json }); g.refresh(); };
+  const patch = async (json: Record<string, unknown>) => { await api(`/api/goals/${id}`, { method: "PATCH", json }); toast.success("Goal updated"); g.refresh(); };
   if (g.error) return <ErrorBox error={g.error} retry={g.reload} />;
   if (!d) return <Spinner />;
   return (
     <div className="space-y-4">
-      <PageHeader back={{ href: "/goals", label: "Goals" }} title={d.name} subtitle={<><Badge>{d.category}</Badge> <Badge>{d.status}</Badge> {d.deadline && `· by ${fmtDate(d.deadline)}`} · {d.priority}</>} action={<><select className="field !w-auto !py-1.5 text-sm" value={d.status} onChange={(e) => patch({ status: e.target.value })}>{["active", "paused", "completed", "abandoned"].map((s) => <option key={s}>{s}</option>)}</select><button className="btn-ghost btn-sm text-negative" onClick={async () => { if (confirm("Delete goal?")) { await api(`/api/goals/${id}`, { method: "DELETE" }); router.push("/goals"); } }}>Delete</button></>} />
+      <PageHeader back={{ href: "/goals", label: "Goals" }} title={d.name} subtitle={<><Badge>{d.category}</Badge> <Badge>{d.status}</Badge> {d.deadline && `· by ${fmtDate(d.deadline)}`} · {d.priority}</>} action={<><select className="field !w-auto !py-1.5 text-sm" value={d.status} onChange={(e) => patch({ status: e.target.value })}>{["active", "paused", "completed", "abandoned"].map((s) => <option key={s}>{s}</option>)}</select><button className="btn-ghost btn-sm text-negative" onClick={() => confirm(async () => { await api(`/api/goals/${id}`, { method: "DELETE" }); toast.success("Goal deleted"); router.push("/goals"); }, { title: "Delete goal?", description: d.name })}>Delete</button></>} />
       <Card title="Progress">
         <div className="flex items-center gap-3"><Bar value={d.progress / 100} tone={d.progress >= 100 ? "positive" : "accent"} h={10} /><span className="tnum font-semibold">{d.progress}%</span></div>
         {d.metricName ? <p className="mt-2 text-sm">{d.metricName}: <span className="tnum font-medium">{d.metricCurrent ?? 0} / {d.metricTarget} {d.metricUnit}</span> <button className="link ml-2 text-xs" onClick={async () => { const v = prompt("Current value", String(d.metricCurrent ?? 0)); if (v != null) await patch({ metricCurrent: Number(v) }); }}>update</button></p> : <p className="mt-2 text-sm"><input type="range" min={0} max={100} value={d.progress} onChange={(e) => patch({ progress: Number(e.target.value) })} className="w-full" /></p>}
@@ -37,6 +40,7 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
           <p className="mt-2 text-xs muted">All tasks: <Link className="link" href="/tasks">Tasks</Link></p>
         </Card>
       </div>
+      {dialog}
     </div>
   );
 }

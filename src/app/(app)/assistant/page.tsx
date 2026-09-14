@@ -2,13 +2,27 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Markdown, Modal } from "@/components/ui";
+import { AnimatePresence, m } from "motion/react";
+import { Sparkles, History, Plus, Wallet, CheckSquare, Dumbbell, GraduationCap, CalendarPlus, BookOpen } from "lucide-react";
+import { Markdown, Modal, Button } from "@/components/ui";
+import { T, V } from "@/components/motion";
 import { api, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 import { ActionList, type Action } from "@/components/ai/ActionList";
 
-interface Msg { role: "user" | "assistant"; text: string; actions?: Action[]; pending?: Action[] }
+interface Msg { id: string; role: "user" | "assistant"; text: string; actions?: Action[]; pending?: Action[] }
 interface Conversation { id: string; title: string; kind: string; updatedAt: string }
+
+const SUGGESTIONS = ["What should I prioritize today?", "I spent €18 on dinner", "Tomorrow I work 10 to 18. Put gym after work and German after dinner", "What did I bench last time?", "How much German did I study this week?", "Summarize my week"];
+const QUICK = [
+  { label: "Expense", icon: Wallet, text: "I spent " },
+  { label: "Task", icon: CheckSquare, text: "Create a task: " },
+  { label: "Workout", icon: Dumbbell, text: "Log my workout: " },
+  { label: "Study", icon: GraduationCap, text: "I studied " },
+  { label: "Event", icon: CalendarPlus, text: "Add to my calendar: " },
+  { label: "Journal", icon: BookOpen, text: "Journal entry: " },
+];
+const STATUS = ["Thinking…", "Looking at your data…", "Working on it…"];
 
 function Assistant() {
   const { aiConfigured } = useShell();
@@ -18,58 +32,74 @@ function Assistant() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState(0);
   const [error, setError] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const convs = useApi<Conversation[]>("/api/ai/conversations");
   const bottom = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const sent = useRef(false);
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, busy]);
+  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [msgs, busy]);
   useEffect(() => { const q = sp.get("q"); if (q && !sent.current) { sent.current = true; send(q); router.replace("/assistant"); } }, [sp]);
+  useEffect(() => { if (!busy) { setStatus(0); return; } const t = setInterval(() => setStatus((s) => Math.min(STATUS.length - 1, s + 1)), 2200); return () => clearInterval(t); }, [busy]);
 
   async function send(text: string) {
     if (!text.trim() || busy) return;
-    setMsgs((m) => [...m, { role: "user", text }]); setInput(""); setBusy(true); setError("");
+    setMsgs((mm) => [...mm, { id: crypto.randomUUID(), role: "user", text }]); setInput(""); setBusy(true); setError("");
     try {
       const r = await api<{ conversationId: string; text: string; actions: Action[]; pending: Action[] }>("/api/ai/chat", { method: "POST", json: { conversationId, text } });
       setConversationId(r.conversationId);
-      setMsgs((m) => [...m, { role: "assistant", text: r.text || "(no text — see actions)", actions: r.actions, pending: r.pending }]);
+      setMsgs((mm) => [...mm, { id: crypto.randomUUID(), role: "assistant", text: r.text || "", actions: r.actions, pending: r.pending }]);
       convs.refresh();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   async function open(id: string) {
-    const c = await api<{ id: string; messages: { role: string; text: string }[]; actions: Action[] }>(`/api/ai/conversations/${id}`);
+    const c = await api<{ id: string; messages: { id: string; role: string; text: string }[]; actions: Action[] }>(`/api/ai/conversations/${id}`);
     setConversationId(c.id);
-    setMsgs(c.messages.filter((m) => m.role === "user" || m.role === "assistant").map((m) => ({ role: m.role as "user", text: m.text })));
+    setMsgs(c.messages.filter((mm) => mm.role === "user" || mm.role === "assistant").map((mm) => ({ id: mm.id, role: mm.role as "user", text: mm.text })));
     setShowHistory(false);
   }
-  const suggestions = ["What should I prioritize today?", "I spent €18 on dinner", "Tomorrow I work 10 to 18. Put gym after work and German after dinner", "What did I bench last time?", "How much German did I study this week?", "Summarize my week"];
+  const prefill = (t: string) => { setInput(t); inputRef.current?.focus(); };
   return (
     <div className="flex flex-col" style={{ minHeight: "calc(100vh - 150px)" }}>
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between">
         <div><h1 className="h1">Assistant</h1><p className="text-xs muted">Acts only through logged tools. <Link className="link" href="/settings#ai">Action log & memory</Link></p></div>
-        <div className="flex gap-2"><button className="btn-ghost btn-sm" onClick={() => setShowHistory(true)}>History</button><button className="btn-ghost btn-sm" onClick={() => { setConversationId(null); setMsgs([]); }}>New</button></div>
+        <div className="flex gap-2"><Button size="sm" icon={<History size={14} />} onClick={() => setShowHistory(true)}>History</Button><Button size="sm" icon={<Plus size={14} />} onClick={() => { setConversationId(null); setMsgs([]); setError(""); }}>New</Button></div>
       </div>
       {!aiConfigured && <div className="card mb-3 border-warning/40 p-3 text-sm">The assistant needs <code>ANTHROPIC_API_KEY</code> on the server. Everything else in the app works without it.</div>}
       <div className="flex-1 space-y-3">
-        {msgs.length === 0 && <div className="grid gap-2 sm:grid-cols-2">{suggestions.map((s) => <button key={s} className="card p-3 text-left text-sm hover:bg-surface-2" onClick={() => send(s)} disabled={!aiConfigured}>{s}</button>)}</div>}
-        {msgs.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "ml-auto max-w-[85%] rounded-2xl bg-accent px-4 py-2.5 text-sm text-accent-fg whitespace-pre-wrap" : "max-w-[95%] space-y-2 rounded-2xl card px-4 py-3"}>
-            {m.role === "user" ? m.text : <Markdown text={m.text} />}
-            {m.role === "assistant" && <ActionList actions={m.actions ?? []} pending={m.pending ?? []} />}
-          </div>
-        ))}
-        {busy && <div className="card w-fit px-4 py-2 text-sm muted">Thinking & acting…</div>}
-        {error && <p className="text-sm text-negative">{error}</p>}
+        {msgs.length === 0 && (
+          <m.div variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.04 } } }} initial="hidden" animate="visible">
+            <m.div variants={V.rise} className="card mb-3 flex items-center gap-3 p-4"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-accent-fg"><Sparkles size={16} /></span><div><p className="text-sm font-medium">Talk to your Personal OS</p><p className="text-xs muted">Log things, ask about your data, plan your day. Actions run through controlled tools and show up below each answer.</p></div></m.div>
+            <div className="grid gap-2 sm:grid-cols-2">{SUGGESTIONS.map((s) => <m.button key={s} variants={V.rise} whileTap={{ scale: 0.98 }} className="card card-interactive p-3 text-left text-sm" onClick={() => send(s)} disabled={!aiConfigured}>{s}</m.button>)}</div>
+          </m.div>
+        )}
+        <AnimatePresence initial={false}>
+          {msgs.map((mm) => (
+            <m.div key={mm.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={T.enter} className={mm.role === "user" ? "ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-sm text-accent-fg whitespace-pre-wrap" : "max-w-[95%] space-y-2 rounded-2xl rounded-bl-md card px-4 py-3"}>
+              {mm.role === "user" ? mm.text : mm.text ? <Markdown text={mm.text} /> : <p className="text-sm muted">Done — see the actions below.</p>}
+              {mm.role === "assistant" && <ActionList actions={mm.actions ?? []} pending={mm.pending ?? []} />}
+            </m.div>
+          ))}
+          {busy && (
+            <m.div key="typing" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, transition: T.exit }} className="card flex w-fit items-center gap-2.5 px-4 py-2.5 text-sm muted">
+              <span className="flex items-center gap-0.5"><span className="dot" /><span className="dot" /><span className="dot" /></span>
+              <AnimatePresence mode="wait"><m.span key={status} initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -3 }} transition={T.state}>{STATUS[status]}</m.span></AnimatePresence>
+            </m.div>
+          )}
+        </AnimatePresence>
+        {error && <m.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-negative">{error}</m.p>}
         <div ref={bottom} />
       </div>
-      <form onSubmit={(e) => { e.preventDefault(); send(input); }} className="sticky bottom-20 mt-3 md:bottom-4">
-        <div className="card flex items-end gap-2 p-2">
-          <textarea rows={2} className="field !border-0 !ring-0 resize-none" placeholder="Talk to your Personal OS…" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }} disabled={!aiConfigured} />
-          <button className="btn-primary" disabled={busy || !input.trim() || !aiConfigured}>Send</button>
-        </div>
-      </form>
+      <div className="sticky bottom-20 mt-3 md:bottom-4">
+        <div className="mb-1.5 flex gap-1.5 overflow-x-auto pb-1">{QUICK.map((q) => <m.button key={q.label} whileTap={{ scale: 0.95 }} transition={T.state} onClick={() => prefill(q.text)} className="btn-subtle btn-sm shrink-0 !rounded-full bg-surface"><q.icon size={12} />{q.label}</m.button>)}</div>
+        <form onSubmit={(e) => { e.preventDefault(); send(input); }} className="card flex items-end gap-2 p-2 shadow-lg shadow-black/5 transition-[border-color] focus-within:border-fg/30">
+          <textarea ref={inputRef} rows={2} className="field !border-0 !ring-0 resize-none !bg-transparent" placeholder="Talk to your Personal OS…" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }} disabled={!aiConfigured} />
+          <Button variant="primary" type="submit" loading={busy} disabled={!input.trim() || !aiConfigured}>Send</Button>
+        </form>
+      </div>
       <Modal open={showHistory} onClose={() => setShowHistory(false)} title="Conversations">
-        {convs.data?.length ? <ul className="divide-y divide-border">{convs.data.map((c) => <li key={c.id} className="flex items-center gap-2 py-2 text-sm"><button className="min-w-0 flex-1 truncate text-left hover:underline" onClick={() => open(c.id)}>{c.title}</button><span className="pill">{c.kind}</span><button className="btn-ghost btn-sm" onClick={async () => { await api(`/api/ai/conversations/${c.id}`, { method: "DELETE" }); convs.refresh(); }}>✕</button></li>)}</ul> : <p className="text-sm muted">No conversations yet.</p>}
+        {convs.data?.length ? <ul className="divide-y divide-border">{convs.data.map((c) => <li key={c.id} className="row -mx-2 flex items-center gap-2 rounded-lg px-2 py-2 text-sm"><button className="min-w-0 flex-1 truncate text-left" onClick={() => open(c.id)}>{c.title}</button><span className="pill">{c.kind}</span><button className="btn-ghost btn-sm" onClick={async () => { await api(`/api/ai/conversations/${c.id}`, { method: "DELETE" }); convs.refresh(); }}>✕</button></li>)}</ul> : <p className="text-sm muted">No conversations yet.</p>}
       </Modal>
     </div>
   );

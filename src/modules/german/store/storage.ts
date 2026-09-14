@@ -25,7 +25,8 @@ export const idbStorage: StateStorage = {
       if (res.ok) {
         const r = (await res.json()) as { state: Record<string, unknown> | null; revision: number }
         revision = r.revision
-        if (r.state && Object.keys(r.state).length) { const wrapped = JSON.stringify({ state: r.state, version: (r.state as { version?: number }).version ?? 1 }); await set(name, wrapped); return wrapped }
+        // zustand/persist compares its own `version` (0 for this store) — not the app-level AppState.version field.
+        if (r.state && Object.keys(r.state).length) { const wrapped = JSON.stringify({ state: r.state, version: 0 }); await set(name, wrapped); return wrapped }
       }
     } catch { /* offline: use cache */ }
     return (await get(name)) ?? null

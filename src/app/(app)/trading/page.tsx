@@ -1,7 +1,8 @@
 "use client";
 import { useState } from "react";
+import { useToast } from "@/components/toast";
 import Link from "next/link";
-import { Badge, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Stat, Tabs, Markdown } from "@/components/ui";
+import { Badge, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Stat, Tabs, Markdown, Button, SkeletonStats } from "@/components/ui";
 import { api, fmtDate, fmtMoney, fmtNum, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 import { MiniLine } from "@/components/charts";
@@ -17,6 +18,8 @@ interface Econ { id: string; title: string; at: string; importance: string }
 
 export default function TradingPage() {
   const { user, aiConfigured } = useShell();
+  const toast = useToast();
+  const [saving, setSaving] = useState(false);
   const cur = user.currency;
   const [mode, setMode] = useState<Mode>("paper");
   const [tab, setTab] = useState<"dashboard" | "journal" | "analytics" | "watchlist" | "brief">("dashboard");
@@ -36,7 +39,7 @@ export default function TradingPage() {
   const all = () => { stats.refresh(); trades.refresh(); watchlists.refresh(); alerts.refresh(); accounts.refresh(); econ.refresh(); };
   const loadQuotes = async () => { const items = watchlists.data?.flatMap((w) => w.items) ?? []; if (!items.length) return; setQuoteErr(""); try { setQuotes(await api("/api/market/quotes", { method: "POST", json: { symbols: items.map((i) => ({ symbol: i.symbol, assetClass: i.assetClass })) } })); } catch (e) { setQuoteErr((e as Error).message); } };
   const submit = async (e: React.FormEvent) => {
-    e.preventDefault(); setError("");
+    e.preventDefault(); setError(""); setSaving(true);
     const num = (k: string) => (form[k] ? Number(form[k]) : null);
     try {
       if (modal === "trade") await api("/api/trading/trades", { method: "POST", json: { accountId: form.accountId || undefined, mode, symbol: form.symbol, assetClass: form.assetClass || "stock", direction: form.direction || "long", status: form.status || "open", strategy: form.strategy || null, timeframe: form.timeframe || null, setup: form.setup || null, entryPrice: num("entryPrice"), exitPrice: num("exitPrice"), stopLoss: num("stopLoss"), target: num("target"), quantity: num("quantity"), fees: Number(form.fees || 0), entryReason: form.entryReason || null, exitReason: form.exitReason || null, emotionalState: form.emotionalState || null, notes: form.notes || null } });
@@ -44,10 +47,11 @@ export default function TradingPage() {
       if (modal === "alert") await api("/api/trading/alerts", { method: "POST", json: { symbol: form.symbol, assetClass: form.assetClass || "stock", condition: form.condition || "above", price: Number(form.price), note: form.note || null } });
       if (modal === "account") await api("/api/trading/accounts", { method: "POST", json: { name: form.name, mode: form.mode || "paper", broker: form.broker || null, startingBalance: Number(form.startingBalance || 0), riskPerTradePct: Number(form.riskPerTradePct || 1) } });
       if (modal === "econ") await api("/api/market/events", { method: "POST", json: { title: form.title, at: new Date(form.at).toISOString(), importance: form.importance || "medium", category: form.category || "macro", country: form.country || null } });
+      toast.success(modal === "trade" ? "Trade logged" : modal === "watch" ? "Added to watchlist" : modal === "alert" ? "Alert created" : modal === "account" ? "Account created" : "Event added", modal === "trade" ? `${form.symbol} ${form.direction ?? "long"} · ${mode === "real" ? "REAL" : "simulated"}` : form.symbol ?? form.name ?? form.title);
       setModal(null); setForm({}); all();
-    } catch (err) { setError((err as Error).message); }
+    } catch (err) { setError((err as Error).message); } finally { setSaving(false); }
   };
-  const genBrief = async () => { setBusy(true); try { await api("/api/ai/reports/market_brief", { method: "POST" }); brief.refresh(); } catch (e) { alert((e as Error).message); } finally { setBusy(false); } };
+  const genBrief = async () => { setBusy(true); try { await api("/api/ai/reports/market_brief", { method: "POST" }); brief.refresh(); toast.success("Market brief generated"); } catch (e) { toast.error("Brief failed", (e as Error).message); } finally { setBusy(false); } };
   const s = stats.data;
   const open = trades.data?.filter((t) => t.status === "open") ?? [];
   return (
@@ -55,11 +59,12 @@ export default function TradingPage() {
       <PageHeader title="Trading" subtitle="Education, research, journaling and analysis. Real and simulated results are never mixed." action={<><div className="flex overflow-hidden rounded-xl border border-border text-sm"><button className={"px-3 py-1.5 " + (mode === "paper" ? "bg-accent text-accent-fg" : "")} onClick={() => setMode("paper")}>SIMULATED</button><button className={"px-3 py-1.5 " + (mode === "real" ? "bg-warning text-white" : "")} onClick={() => setMode("real")}>REAL</button></div><button className="btn-primary btn-sm" onClick={() => { setForm({ direction: "long", status: "open", assetClass: "stock", accountId: accounts.data?.find((a) => a.mode === mode)?.id ?? "" }); setModal("trade"); }}>+ Trade</button><Link href="/trading/academy" className="btn-ghost btn-sm">Academy</Link></>} />
       <Tabs value={tab} onChange={setTab} options={[{ value: "dashboard", label: "Dashboard" }, { value: "journal", label: "Journal" }, { value: "analytics", label: "Analytics" }, { value: "watchlist", label: "Watchlist & alerts" }, { value: "brief", label: "Daily brief" }]} />
       {stats.error && <ErrorBox error={stats.error} retry={stats.reload} />}
+      {stats.loading && !s && tab === "dashboard" && <SkeletonStats />}
       {tab === "dashboard" && s && (
         <>
           <p className="text-xs"><Badge tone={mode === "real" ? "warning" : "muted"}>{mode === "real" ? "REAL account" : "SIMULATED (paper) account"}</Badge> {accounts.data?.filter((a) => a.mode === mode).map((a) => <span key={a.id} className="ml-2 muted">{a.name} · start {fmtMoney(a.startingBalance, cur)} · risk/trade {a.riskPerTradePct}%</span>)}{!accounts.data?.some((a) => a.mode === mode) && <button className="link ml-2" onClick={() => { setForm({ mode }); setModal("account"); }}>Create {mode} account</button>}</p>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            <Stat label="Closed P&L" value={fmtMoney(s.totalPnl, cur)} tone={s.totalPnl >= 0 ? "positive" : "negative"} sub={`${s.trades} closed · ${s.openTrades} open`} />
+            <Stat label="Closed P&L" count={s.totalPnl} format={(v) => fmtMoney(v, cur)} tone={s.totalPnl >= 0 ? "positive" : "negative"} sub={`${s.trades} closed · ${s.openTrades} open`} />
             <Stat label="Win rate" value={`${s.winRate}%`} sub={`${s.wins}W / ${s.losses}L`} />
             <Stat label="Expectancy" value={fmtMoney(s.expectancy, cur)} sub={`PF ${s.profitFactor ?? "∞"} · avg R ${s.avgR ?? "—"}`} />
             <Stat label="Max drawdown" value={fmtMoney(s.maxDrawdown, cur)} tone="warning" />
@@ -83,7 +88,7 @@ export default function TradingPage() {
       {tab === "watchlist" && (
         <div className="grid gap-3 md:grid-cols-2">
           <Card title="Watchlist" action={<><button className="btn-ghost btn-sm" onClick={loadQuotes}>Quotes</button><button className="btn-primary btn-sm" onClick={() => { setForm({ assetClass: "stock" }); setModal("watch"); }}>+ Symbol</button></>}><WatchlistView watchlists={watchlists.data ?? []} quotes={quotes} err={quoteErr} onRemove={async (id) => { await api(`/api/trading/watchlist/${id}`, { method: "DELETE" }); all(); }} onNote={async (id, notes) => { await api(`/api/trading/watchlist/${id}`, { method: "PATCH", json: { notes } }); all(); }} /></Card>
-          <Card title="Price alerts" action={<><button className="btn-ghost btn-sm" onClick={async () => { const r = await api<{ fired: number }>("/api/market/alerts/check", { method: "POST" }); alert(`${r.fired} alert(s) triggered`); all(); }}>Check now</button><button className="btn-primary btn-sm" onClick={() => { setForm({ condition: "above", assetClass: "stock" }); setModal("alert"); }}>+ Alert</button></>}>{!alerts.data?.length ? <p className="text-sm muted">No alerts. Alerts are checked hourly by the cron job and on demand.</p> : <ul className="divide-y divide-border text-sm">{alerts.data.map((a) => <li key={a.id} className="flex items-center gap-2 py-1.5"><span className="flex-1">{a.symbol} {a.condition} {a.price} {a.triggeredAt && <Badge tone="warning">triggered {fmtDate(a.triggeredAt)}</Badge>}{!a.active && !a.triggeredAt && <Badge>inactive</Badge>}</span><button className="btn-ghost btn-sm" onClick={async () => { await api(`/api/trading/alerts/${a.id}`, { method: "DELETE" }); all(); }}>✕</button></li>)}</ul>}</Card>
+          <Card title="Price alerts" action={<><button className="btn-ghost btn-sm" onClick={async () => { const r = await api<{ fired: number }>("/api/market/alerts/check", { method: "POST" }); toast.info(`${r.fired} alert(s) triggered`); all(); }}>Check now</button><button className="btn-primary btn-sm" onClick={() => { setForm({ condition: "above", assetClass: "stock" }); setModal("alert"); }}>+ Alert</button></>}>{!alerts.data?.length ? <p className="text-sm muted">No alerts. Alerts are checked hourly by the cron job and on demand.</p> : <ul className="divide-y divide-border text-sm">{alerts.data.map((a) => <li key={a.id} className="flex items-center gap-2 py-1.5"><span className="flex-1">{a.symbol} {a.condition} {a.price} {a.triggeredAt && <Badge tone="warning">triggered {fmtDate(a.triggeredAt)}</Badge>}{!a.active && !a.triggeredAt && <Badge>inactive</Badge>}</span><button className="btn-ghost btn-sm" onClick={async () => { await api(`/api/trading/alerts/${a.id}`, { method: "DELETE" }); all(); }}>✕</button></li>)}</ul>}</Card>
         </div>
       )}
       {tab === "brief" && (
@@ -117,7 +122,7 @@ export default function TradingPage() {
           {modal === "account" && <><Field label="Name"><input className="field" required autoFocus value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field><div className="grid grid-cols-3 gap-2"><Field label="Mode"><select className="field" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}><option value="paper">paper</option><option value="real">real</option></select></Field><Field label="Starting balance"><input className="field" type="number" step="0.01" value={form.startingBalance ?? ""} onChange={(e) => setForm({ ...form, startingBalance: e.target.value })} /></Field><Field label="Risk/trade %"><input className="field" type="number" step="0.1" value={form.riskPerTradePct ?? ""} onChange={(e) => setForm({ ...form, riskPerTradePct: e.target.value })} /></Field></div></>}
           {modal === "econ" && <><Field label="Title"><input className="field" required autoFocus value={form.title ?? ""} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field><div className="grid grid-cols-3 gap-2"><Field label="When"><input className="field" type="datetime-local" required value={form.at ?? ""} onChange={(e) => setForm({ ...form, at: e.target.value })} /></Field><Field label="Importance"><select className="field" value={form.importance} onChange={(e) => setForm({ ...form, importance: e.target.value })}>{["low", "medium", "high"].map((t) => <option key={t}>{t}</option>)}</select></Field><Field label="Category"><input className="field" value={form.category ?? ""} onChange={(e) => setForm({ ...form, category: e.target.value })} /></Field></div></>}
           {error && <p className="text-sm text-negative">{error}</p>}
-          <div className="flex justify-end"><button className="btn-primary">Save</button></div>
+          <div className="flex justify-end"><Button variant="primary" type="submit" loading={saving}>Save</Button></div>
         </form>
       </Modal>
     </div>

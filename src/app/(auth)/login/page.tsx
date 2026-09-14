@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/client";
+import { MotionProvider, FadeIn } from "@/components/motion";
+import { Button } from "@/components/ui";
 import { Suspense } from "react";
 
 function LoginForm() {
@@ -20,15 +22,15 @@ function LoginForm() {
     catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
   return (
-    <form onSubmit={submit} className="card p-6">
+    <MotionProvider><FadeIn variant="scale"><form onSubmit={submit} className="card p-6 shadow-xl shadow-black/5">
       <h1 className="h1 mb-1">{process.env.NEXT_PUBLIC_APP_NAME ?? "Personal OS"}</h1>
       <p className="mb-5 text-sm muted">Private access. Sign in to continue.</p>
       <label className="mb-3 block text-sm"><span className="mb-1 block font-medium">Email</span><input className="field" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
       <label className="mb-4 block text-sm"><span className="mb-1 block font-medium">Password</span><input className="field" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label>
       {error && <p className="mb-3 text-sm text-negative">{error}</p>}
-      <button className="btn-primary w-full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+      <Button variant="primary" type="submit" className="w-full" loading={busy}>Sign in</Button>
       {status?.signupAllowed && !status.needsSetup && <p className="mt-4 text-center text-xs muted"><Link className="link" href="/setup">Create an account</Link></p>}
-    </form>
+    </form></FadeIn></MotionProvider>
   );
 }
 export default function LoginPage() {

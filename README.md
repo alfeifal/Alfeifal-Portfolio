@@ -16,8 +16,8 @@ logged (`ai_action_logs`) and, for medium/high-risk actions, held for your confi
 
 ## Stack
 Next.js 16 (App Router, route handlers, `proxy.ts`) · React 19 · TypeScript · Tailwind CSS 3 ·
-PostgreSQL 16 · Drizzle ORM · Zod · Anthropic SDK (tool use) · Recharts · PWA (manifest + SW) ·
-Vitest.
+PostgreSQL 16 · Drizzle ORM · Zod · Anthropic SDK (tool use) · Recharts · Motion (animation) ·
+PWA (manifest + SW) · Vitest.
 
 ## Quick start
 ```bash
