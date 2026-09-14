@@ -6,6 +6,7 @@ import { badRequest, notFound } from "@/server/http";
 import { dateSchema } from "./tasks";
 import { round2 } from "@/lib/money";
 import { addDaysKey, todayKey } from "@/lib/dates";
+import { emitDomainEvent } from "@/server/events/bus";
 
 export const accountSchema = z.object({
   name: z.string().min(1).max(100),
@@ -148,6 +149,8 @@ export async function createTransaction(userId: string, input: z.infer<typeof tr
     .insert(transactions)
     .values({ ...rest, userId, categoryId, accountId, date: input.date ?? todayKey(tz), currency: input.currency ?? "EUR", amount: round2(input.amount) })
     .returning();
+  if (t.type === "expense") await emitDomainEvent(userId, { type: "expense.added", transactionId: t.id, amount: t.amount, categoryId: t.categoryId, date: t.date }, { tz });
+  else if (t.type === "income") await emitDomainEvent(userId, { type: "income.added", transactionId: t.id, amount: t.amount, categoryId: t.categoryId, date: t.date }, { tz });
   return t;
 }
 export async function updateTransaction(userId: string, id: string, input: z.infer<typeof transactionUpdateSchema>) {
@@ -156,11 +159,13 @@ export async function updateTransaction(userId: string, id: string, input: z.inf
   if (categoryId === undefined && input.category) categoryId = (await resolveCategory(userId, input.category, (input.type ?? current.type) as "expense" | "income")).id;
   const { category: _c, ...rest } = input;
   const [t] = await db.update(transactions).set({ ...rest, ...(categoryId !== undefined ? { categoryId } : {}), ...(input.amount != null ? { amount: round2(input.amount) } : {}) }).where(and(eq(transactions.id, id), eq(transactions.userId, userId))).returning();
+  await emitDomainEvent(userId, { type: "transaction.changed", transactionId: id, transactionType: t.type, reason: "updated" });
   return t;
 }
 export async function deleteTransaction(userId: string, id: string) {
-  await getTransaction(userId, id);
+  const current = await getTransaction(userId, id);
   await db.delete(transactions).where(and(eq(transactions.id, id), eq(transactions.userId, userId)));
+  await emitDomainEvent(userId, { type: "transaction.changed", transactionId: id, transactionType: current.type, reason: "deleted" });
 }
 
 // ---------- Summaries ----------
@@ -261,8 +266,9 @@ export async function processRecurring(userId: string, tz?: string) {
     let next = r.nextDate;
     while (next <= today) {
       if (r.endDate && next > r.endDate) break;
-      await db.insert(transactions).values({ userId, type: r.type, amount: r.amount, date: next, description: r.description, accountId: r.accountId, categoryId: r.categoryId, recurringId: r.id, source: "user" });
+      const [t] = await db.insert(transactions).values({ userId, type: r.type, amount: r.amount, date: next, description: r.description, accountId: r.accountId, categoryId: r.categoryId, recurringId: r.id, source: "user" }).returning();
       created++;
+      if (t.type === "expense" || t.type === "income") await emitDomainEvent(userId, { type: t.type === "expense" ? "expense.added" : "income.added", transactionId: t.id, amount: t.amount, categoryId: t.categoryId, date: t.date }, { tz });
       next = advance(next, r.frequency, r.dayOfMonth);
     }
     await db.update(recurringTransactions).set({ nextDate: next, active: r.endDate && next > r.endDate ? false : r.active }).where(eq(recurringTransactions.id, r.id));

@@ -32,7 +32,7 @@ modules/german/          the original German project (see docs/german-audit.md)
 | File | Tables |
 |---|---|
 | core | users, sessions, audit_logs, notifications, ai_conversations, ai_messages, ai_action_logs, ai_memory, ai_reports |
-| planning | goals, milestones, projects, tasks, events, journal_entries |
+| planning | goals (incl. linked metric: `metric_source`/`metric_kind`/`metric_ref`/`metric_period`), milestones, projects, tasks, events, journal_entries |
 | finance | accounts, categories, transactions (expense/income/transfer), recurring_transactions, budgets, savings_goals |
 | investing | investment_accounts, investment_assets, investment_transactions, portfolio_snapshots |
 | trading | trading_accounts (mode real/paper), strategies, trades (= journal), watchlists, watchlist_items, price_alerts, market_quotes, market_news, economic_events, academy_lessons, academy_progress |
@@ -72,6 +72,93 @@ AI tools) and functions that take `userId` first. Cross-module effects live here
   nutrition goals, preferences (keys only), notification settings. Not audited on purpose:
   `PUT /api/german/state` — the module persists its whole state on every change; the row's
   `revision`/`updatedAt` is the change trail (see the route comment).
+
+## Domain events (`src/server/events`, phase 2)
+
+```
+USER / UI / AI tool
+      ↓                     (routes and tools only call services — they never emit)
+APPLICATION SERVICE          tasks · training · studies · german · finance
+      ↓
+DATABASE MUTATION            committed first; the event describes what already happened
+      ↓
+emitDomainEvent(userId, e)   in-process, synchronous, no queue, no broker, nothing to deploy
+      ↓
+SUBSCRIBERS (isolated)
+      ├── goals          recomputes linked goals from their source of truth
+      └── notifications  reacts to the derived goal.progress_changed event only
+```
+
+- **Who emits.** Only services, right after their own write. API routes, React components and AI tools
+  never emit: they call the service, the service mutates and emits. `emitDomainEvent` returns which
+  subscribers ran and which failed; callers ignore it.
+- **Isolation.** Every subscriber runs inside its own `try/catch`. A throwing subscriber is logged to the
+  console *and* written to `audit_logs` (actor `system`, action `domain_event.subscriber_failed`, with the
+  subscriber name, the message and the event), and the remaining subscribers still run. The caller's
+  mutation is already committed and is never rolled back: this is best-effort propagation, not a
+  distributed transaction. Nothing is swallowed silently.
+- **Transactions.** Events are emitted after the write they describe, outside any `db.transaction`, so a
+  subscriber can always read the committed row. A failed subscriber leaves goals stale at worst, and the
+  next event — or simply opening Goals, which recomputes on read — repairs it.
+- **Nesting.** Subscribers may emit derived events (the goals subscriber emits `goal.progress_changed`);
+  the bus refuses to go deeper than 3 levels.
+
+### Events
+| Event | Emitted by | Meaning |
+|---|---|---|
+| `task.completed` | `tasks.completeTask`, `tasks.updateTask` | a task moved to done |
+| `task.changed` | `tasks.updateTask`, `tasks.deleteTask` | a done task was reopened, relinked or deleted |
+| `workout.finished` | `training.updateSession` | a session was closed (payload says how many working sets it has) |
+| `workout.changed` | `training.logSet` / `updateSet` / `deleteSet` / `updateSession` / `deleteSession` | sets or session state changed |
+| `study.logged` | `studies.insertStudySession` (so also `logStudySession` and the German bridge) | a study session was recorded |
+| `study.changed` | `studies.deleteStudySession` | a study session was removed |
+| `expense.added` / `income.added` | `finance.createTransaction`, `finance.processRecurring` | a transaction was recorded |
+| `transaction.changed` | `finance.updateTransaction` / `deleteTransaction` | an existing transaction changed |
+| `german.unit_completed` | `german.recordGermanEvent` | a unit test or exam passed (score ≥ 70) |
+| `german.state_saved` | `german.saveGermanState` | the module persisted its own state |
+| `goal.progress_changed` | the goals subscriber (derived) | a linked goal's value actually changed |
+
+### Linked goals
+A goal may declare where its number comes from: `metricSource` + `metricKind` + `metricPeriod`
+(`week` · `month` · `total`) and an optional `metricRef`. Allowed combinations live in
+`services/goal-metrics.ts` (`METRIC_SOURCES`) and are validated on create/update — an unsupported
+metric is a 400, never a silently dead goal:
+
+| Source | Kind | Read from | Periods |
+|---|---|---|---|
+| tasks | `completed_tasks` | tasks done in the period, of a project (`metricRef`) or linked to this goal | week · month · total |
+| training | `completed_workouts` | sessions with at least one working set | week · month · total |
+| training | `volume_kg` | weight × reps of working sets | week · month · total |
+| study | `minutes` | `study_sessions`, optionally one subject (`metricRef` = id or slug) | week · month · total |
+| german | `minutes` | `study_sessions` on the German subject (the phase‑1 single path) | week · month · total |
+| german | `units_passed` | the German module's own state (`testBest ≥ 70`), read-only | total |
+| finance | `net_savings` / `income` | `transactions` (transfers excluded) | week · month · total |
+
+**No parallel counters.** `metricCurrent` is a cache of a query, never an accumulator: subscribers call
+`goals.recomputeLinkedGoals`, which re-reads the owning module and writes only when the value actually
+changed. That is what makes the whole design idempotent — replaying an event, delivering it twice, or
+running a recompute for no reason all converge on the same number, so no event ids need to be persisted
+and no new table was added. Reads (`listGoals`, `getGoal`) recompute too, which is how period roll-overs
+(a new week or month) are picked up even though no event announces them. Manual progress edits
+(`updateGoalProgress`, `metricCurrent` in `updateGoal`) are refused for linked goals with a message
+pointing at the activity to log; purely manual goals keep working exactly as before. Periodic goals
+(week/month) never auto-complete — they reset with their period; `total` goals do.
+A goal is **behind pace** (`goalPace`) when at least 40 % of its window has elapsed and it is below 75 %
+of a steady pace; goals with no end date are never at risk.
+
+### Audit trail
+The existing `audit_logs` table is the only audit system. The user's own action is recorded as before
+(actor `user`, e.g. `tasks.complete`, `finance.transaction.create`). Everything the bus causes is
+recorded separately as a system consequence: `goal.recomputed` (actor `system`, with the cause event,
+the metric and the before/after state) and `domain_event.subscriber_failed`. So a goal moving on its own
+is always traceable to the user action that caused it.
+
+### Notifications from events
+Only two transitions are pushed, both deduplicated per goal and period: a linked goal **reaching** its
+target, and a goal that was behind pace being **back on track**. Ordinary progress sends nothing — no
+message per workout, expense or task — and everything is skipped when the user turns goal notifications
+off. "Goal at risk" is deliberately *not* emitted here: it becomes true on a quiet day, not on an
+action, so it belongs to the daily generator (a later phase).
 
 ## AI layer (`src/server/ai`)
 - `registry.ts` — `defineTool({ name, module, risk, schema, run, needsConfirmation, summarize })`.
@@ -116,9 +203,13 @@ files, and a fully typed service/tool layer the agent can inspect.
 
 ## Testing
 `tests/unit.test.ts` (pure logic: passwords, recurrence, trade metrics, routine transcription, rate
-limit, CSRF, CSV, zod→JSON schema) and `tests/services.test.ts` (integration against a real
-PostgreSQL: bootstrap, tasks, finance, training, calendar, German bridge, trading separation, AI tool
-gating/logging, notifications, search, export).
+limit, CSRF, CSV, zod→JSON schema) and three integration suites against a real PostgreSQL:
+`tests/services.test.ts` (bootstrap, tasks, finance, training, calendar, German bridge, trading
+separation, AI tool gating/logging, notifications, search, export), `tests/integration.test.ts`
+(phase 1: the single German write path, workouts vs empty sessions, finance balance labelling) and
+`tests/events.test.ts` (phase 2: one test per domain event, subscriber failure isolation,
+idempotency on replay, cross-user isolation, events with no matching goal, and operations with no
+subscriber at all).
 
 ## UI system and motion language
 - **Primitives** (`src/components/ui/index.tsx`): `Card` (kinds `static` / `interactive` / `clickable`), `Stat` (metric card, `count` for a fast count-up on important numbers only), `Button` (idle / hover / press / loading / success / disabled) and `AsyncButton`, `Modal` (scale 0.97→1 + backdrop fade, bottom sheet on mobile), `ConfirmDialog` + `useConfirm` for destructive actions, `Tabs` with a shared sliding indicator, `Checkbox` with a drawn check mark, `Field`/`FieldError` (height + opacity), `Empty` (contextual copy + action), `Skeleton*` shimmer loaders, `Tooltip`, `Badge`, `Source` (provenance), `Markdown`.

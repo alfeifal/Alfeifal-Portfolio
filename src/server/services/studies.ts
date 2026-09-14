@@ -6,6 +6,7 @@ import { badRequest, notFound } from "@/server/http";
 import { dateSchema } from "./tasks";
 import { todayKey } from "@/lib/dates";
 import { recordGermanEvent } from "./german";
+import { emitDomainEvent } from "@/server/events/bus";
 
 /** Slug of the bootstrapped German subject: study activity for it is owned by the German bridge (see logStudySession). */
 export const GERMAN_SUBJECT_SLUG = "german";
@@ -91,6 +92,7 @@ async function isGermanSubject(userId: string, subjectId: string) {
 /** Plain insert with no cross-module effects. Only the German bridge should call this directly; everything else goes through logStudySession. */
 export async function insertStudySession(userId: string, input: Omit<z.infer<typeof studySessionSchema>, "subject"> & { subjectId: string | null }, tz?: string) {
   const [s] = await db.insert(studySessions).values({ ...input, userId, date: input.date ?? todayKey(tz) }).returning();
+  await emitDomainEvent(userId, { type: "study.logged", sessionId: s.id, subjectId: s.subjectId, minutes: s.durationMinutes, date: s.date, source: s.source }, { tz });
   return s;
 }
 
@@ -116,7 +118,8 @@ export async function logStudySession(userId: string, input: z.infer<typeof stud
   return insertStudySession(userId, { ...rest, subjectId }, tz);
 }
 export async function deleteStudySession(userId: string, id: string) {
-  await db.delete(studySessions).where(and(eq(studySessions.id, id), eq(studySessions.userId, userId)));
+  const [gone] = await db.delete(studySessions).where(and(eq(studySessions.id, id), eq(studySessions.userId, userId))).returning({ subjectId: studySessions.subjectId });
+  if (gone) await emitDomainEvent(userId, { type: "study.changed", sessionId: id, subjectId: gone.subjectId, reason: "deleted" });
 }
 
 export async function studyProgress(userId: string, range: { from: string; to: string }) {

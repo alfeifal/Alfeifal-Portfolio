@@ -4,6 +4,7 @@ import { db } from "@/server/db";
 import { tasks } from "@/server/db/schema";
 import { notFound } from "@/server/http";
 import { addDaysKey, todayKey } from "@/lib/dates";
+import { emitDomainEvent } from "@/server/events/bus";
 
 export const prioritySchema = z.enum(["low", "medium", "high", "urgent"]);
 export const taskStatusSchema = z.enum(["todo", "in_progress", "done", "cancelled"]);
@@ -62,17 +63,20 @@ export async function createTask(userId: string, input: TaskCreate) {
   return t;
 }
 
-export async function updateTask(userId: string, id: string, input: z.infer<typeof taskUpdateSchema>) {
-  await getTask(userId, id);
+export async function updateTask(userId: string, id: string, input: z.infer<typeof taskUpdateSchema>, tz?: string) {
+  const prev = await getTask(userId, id);
   const patch: Partial<typeof tasks.$inferInsert> = { ...input };
-  if (input.status === "done") patch.completedAt = new Date();
-  else if (input.status) patch.completedAt = null;
+  if (input.status === "done" && prev.status !== "done") patch.completedAt = new Date();
+  else if (input.status && input.status !== "done") patch.completedAt = null;
   const [t] = await db.update(tasks).set(patch).where(and(eq(tasks.id, id), eq(tasks.userId, userId))).returning();
+  if (t.status === "done" && prev.status !== "done") await emitDomainEvent(userId, { type: "task.completed", taskId: t.id, projectId: t.projectId, goalId: t.goalId, date: todayKey(tz) }, { tz });
+  else if (prev.status === "done" && t.status !== "done") await emitDomainEvent(userId, { type: "task.changed", taskId: t.id, projectId: t.projectId, goalId: t.goalId, reason: "reopened" }, { tz });
+  else if (prev.status === "done" && (prev.goalId !== t.goalId || prev.projectId !== t.projectId)) await emitDomainEvent(userId, { type: "task.changed", taskId: t.id, projectId: t.projectId, goalId: t.goalId, reason: "updated" }, { tz });
   return t;
 }
 
 /** Completing a recurring task spawns the next occurrence. */
-export async function completeTask(userId: string, id: string) {
+export async function completeTask(userId: string, id: string, tz?: string) {
   const t = await getTask(userId, id);
   const [done] = await db.update(tasks).set({ status: "done", completedAt: new Date() }).where(eq(tasks.id, id)).returning();
   let next: typeof tasks.$inferSelect | null = null;
@@ -85,12 +89,14 @@ export async function completeTask(userId: string, id: string) {
         .returning();
     }
   }
+  if (t.status !== "done") await emitDomainEvent(userId, { type: "task.completed", taskId: done.id, projectId: done.projectId, goalId: done.goalId, date: todayKey(tz) }, { tz });
   return { task: done, next };
 }
 
-export async function deleteTask(userId: string, id: string) {
-  await getTask(userId, id);
+export async function deleteTask(userId: string, id: string, tz?: string) {
+  const t = await getTask(userId, id);
   await db.delete(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
+  if (t.status === "done") await emitDomainEvent(userId, { type: "task.changed", taskId: id, projectId: t.projectId, goalId: t.goalId, reason: "deleted" }, { tz });
 }
 
 /** recurrence grammar: daily | weekdays | weekly | weekly:MO,WE,FR | monthly | monthly:15 | yearly */

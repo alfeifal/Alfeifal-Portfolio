@@ -5,6 +5,6 @@ import { audit } from "@/server/audit";
 export const POST = withAuth(async (req, { user }) => {
   const input = await parseBody(req, germanEventSchema);
   const r = await recordGermanEvent(user.id, input, user.timezone, { source: "user" });
-  if (!r.deduplicated) await audit({ userId: user.id, actor: "user", action: "german.event", entityType: "german_event", entityId: r.event.id, metadata: { kind: input.kind, unitId: input.unitId ?? null, minutes: r.session?.durationMinutes ?? 0, studySessionId: r.session?.id ?? null, goalsUpdated: r.goalsUpdated } });
+  if (!r.deduplicated) await audit({ userId: user.id, actor: "user", action: "german.event", entityType: "german_event", entityId: r.event.id, metadata: { kind: input.kind, unitId: input.unitId ?? null, minutes: r.session?.durationMinutes ?? 0, studySessionId: r.session?.id ?? null } });
   return json(r, { status: r.deduplicated ? 200 : 201 });
 });

@@ -41,7 +41,6 @@ d("phase 1 — German single source of truth", () => {
   it("German via UI: one event, one study session labelled source=user, goal progress", async () => {
     const r = await de.recordGermanEvent(user.id, { kind: "session", durationSec: 1800, unitId: "u2", label: "Unidad u2" }, TZ);
     expect(r.deduplicated).toBe(false);
-    expect(r.goalsUpdated).toBe(1);
     expect(r.session).toMatchObject({ subjectId: germanSubjectId, durationMinutes: 30, source: "user", link: { type: "german_event", id: r.event.id } });
     expect(r.event.data).toMatchObject({ source: "user" });
     expect(await countEvents()).toBe(1);
@@ -98,7 +97,6 @@ d("phase 1 — German single source of truth", () => {
   it("events without duration (unit test, score) are recorded but create no study session", async () => {
     const r = await de.recordGermanEvent(user.id, { kind: "unit_test", unitId: "u2", score: 85 }, TZ);
     expect(r.session).toBeNull();
-    expect(r.goalsUpdated).toBe(0);
     expect(await countEvents()).toBe(3);
     expect(await germanSessions()).toHaveLength(2);
   });

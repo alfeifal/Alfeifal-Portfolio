@@ -68,7 +68,7 @@ export async function weeklyReview(user: SessionUser, refDate?: string) {
     studyProgress(user.id, { from, to }),
     germanSummary(user.id, { from, to }),
     listProjects(user.id, "active"),
-    listGoals(user.id, "active"),
+    listGoals(user.id, "active", user.timezone),
     tradingStatistics(user.id, "paper", { from, to }),
     tradingStatistics(user.id, "real", { from, to }),
     listExams(user.id, true, tz),

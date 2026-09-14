@@ -3,8 +3,16 @@ import { z } from "zod";
 import { db } from "@/server/db";
 import { germanEvents, germanProgress } from "@/server/db/schema";
 import { GERMAN_SUBJECT_SLUG, insertStudySession, resolveSubject } from "./studies";
-import { updateGoalProgress, listGoals } from "./goals";
 import { todayKey } from "@/lib/dates";
+import { emitDomainEvent } from "@/server/events/bus";
+
+/** Pass threshold used by the module for a unit test (see ui/pages/Stats.tsx in the module). Read-only view of the module's own state. */
+const UNIT_PASS_SCORE = 70;
+type GermanStateView = { xp?: number; streak?: number; totalTimeSec?: number; lessons?: Record<string, { testBest: number }>; lastStudyDay?: string };
+export function unitsPassedFromState(state: unknown) {
+  const s = (state ?? {}) as GermanStateView;
+  return Object.values(s.lessons ?? {}).filter((l) => (l?.testBest ?? 0) >= UNIT_PASS_SCORE).length;
+}
 
 /** The German module owns its state shape; the server treats it as an opaque, versioned JSON document. */
 export async function getGermanState(userId: string) {
@@ -16,11 +24,13 @@ export async function saveGermanState(userId: string, state: Record<string, unkn
   const [row] = await db.select().from(germanProgress).where(eq(germanProgress.userId, userId));
   if (!row) {
     const [created] = await db.insert(germanProgress).values({ userId, state, revision: 1 }).returning();
+    await emitDomainEvent(userId, { type: "german.state_saved", revision: created.revision });
     return { revision: created.revision, conflict: false };
   }
   // Last-writer-wins with conflict flag: the client merges on conflict instead of clobbering.
   const conflict = baseRevision != null && baseRevision !== row.revision;
   const [updated] = await db.update(germanProgress).set({ state, revision: row.revision + 1, updatedAt: new Date() }).where(eq(germanProgress.id, row.id)).returning();
+  await emitDomainEvent(userId, { type: "german.state_saved", revision: updated.revision });
   return { revision: updated.revision, conflict };
 }
 
@@ -71,14 +81,14 @@ export async function recordGermanEvent(userId: string, input: z.infer<typeof ge
     ))
     .orderBy(desc(germanEvents.at))
     .limit(1);
-  if (dup) return { event: dup, session: null, goalsUpdated: 0, deduplicated: true as const };
+  if (dup) return { event: dup, session: null, deduplicated: true as const };
 
   const [ev] = await db.insert(germanEvents).values({ ...input, data: { ...(input.data ?? {}), source }, userId }).returning();
   const minutes = input.durationSec ? Math.round(input.durationSec / 60) : 0;
   let session: Awaited<ReturnType<typeof insertStudySession>> | null = null;
-  let goalsUpdated = 0;
   if (minutes >= 1) {
     const subjectId = opts.subjectId ?? (await resolveSubject(userId, { slug: GERMAN_SUBJECT_SLUG, subject: "German" }));
+    // insertStudySession emits study.logged → linked goals (study/german minutes) recompute from study_sessions.
     session = await insertStudySession(userId, {
       subjectId,
       durationMinutes: minutes,
@@ -89,13 +99,11 @@ export async function recordGermanEvent(userId: string, input: z.infer<typeof ge
       source,
       date: opts.date ?? todayKey(tz),
     }, tz);
-    const goals = await listGoals(userId, "active");
-    for (const g of goals.filter((g) => g.category === "german" && g.metricUnit === "min" && g.metricTarget)) {
-      await updateGoalProgress(userId, g.id, { delta: minutes });
-      goalsUpdated++;
-    }
   }
-  return { event: ev, session, goalsUpdated, deduplicated: false as const };
+  if ((input.kind === "unit_test" || input.kind === "exam") && input.score != null && input.score >= UNIT_PASS_SCORE) {
+    await emitDomainEvent(userId, { type: "german.unit_completed", eventId: ev.id, unitId: input.unitId ?? null, score: input.score, kind: input.kind }, { tz });
+  }
+  return { event: ev, session, deduplicated: false as const };
 }
 
 export async function germanSummary(userId: string, range: { from: string; to: string }) {
@@ -105,7 +113,7 @@ export async function germanSummary(userId: string, range: { from: string; to: s
     .where(and(eq(germanEvents.userId, userId), gte(germanEvents.at, new Date(range.from)), lte(germanEvents.at, new Date(range.to + "T23:59:59Z"))))
     .groupBy(germanEvents.kind);
   const st = await getGermanState(userId);
-  const state = (st.state ?? {}) as { xp?: number; streak?: number; totalTimeSec?: number; lessons?: Record<string, { testBest: number }>; lastStudyDay?: string };
+  const state = (st.state ?? {}) as GermanStateView;
   const recent = await db.select().from(germanEvents).where(eq(germanEvents.userId, userId)).orderBy(desc(germanEvents.at)).limit(10);
   return {
     range,
@@ -114,7 +122,7 @@ export async function germanSummary(userId: string, range: { from: string; to: s
     xp: state.xp ?? 0,
     streak: state.streak ?? 0,
     totalStudyMinutes: Math.round((state.totalTimeSec ?? 0) / 60),
-    unitsPassed: Object.values(state.lessons ?? {}).filter((l) => l.testBest >= 70).length,
+    unitsPassed: unitsPassedFromState(state),
     lastStudyDay: state.lastStudyDay ?? null,
     recent,
     source: "calculated" as const,

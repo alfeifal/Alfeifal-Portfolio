@@ -21,7 +21,7 @@ export async function buildSystemPrompt(user: SessionUser, extra?: string) {
     listTasks(user.id, { view: "today", tz, limit: 15 }),
     listTasks(user.id, { view: "overdue", tz, limit: 10 }),
     listEvents(user.id, { from: new Date(today + "T00:00:00"), to: new Date(today + "T23:59:59") }).catch(() => []),
-    listGoals(user.id, "active"),
+    listGoals(user.id, "active", tz),
     workoutForDate(user.id, today).catch(() => null),
     financialSummary(user.id, { from: today.slice(0, 7) + "-01", to: today }).catch(() => null),
   ]);

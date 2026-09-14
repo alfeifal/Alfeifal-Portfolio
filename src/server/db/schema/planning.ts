@@ -24,6 +24,15 @@ export const goals = pgTable(
     metricUnit: text("metric_unit"),
     metricTarget: numeric("metric_target", { precision: 14, scale: 2, mode: "number" }),
     metricCurrent: numeric("metric_current", { precision: 14, scale: 2, mode: "number" }),
+    /**
+     * Linked metric (phase 2). When metricSource is set, metricCurrent is computed from that module's own
+     * data (tasks, workout_sessions, study_sessions, german_progress, transactions) instead of being a
+     * manually maintained counter. See services/goal-metrics.ts for the allowed combinations.
+     */
+    metricSource: text("metric_source"), // tasks | training | study | german | finance
+    metricKind: text("metric_kind"), // completed_tasks | completed_workouts | volume_kg | minutes | units_passed | net_savings | income
+    metricRef: text("metric_ref"), // tasks: project id · study: subject id or slug
+    metricPeriod: text("metric_period"), // week | month | total (since the goal was created)
     completedAt: timestamp("completed_at", { withTimezone: true }),
     source: dataSourceEnum("source").notNull().default("user"),
     ...timestamps,

@@ -7,6 +7,7 @@ import { ROUTINE_DAYS, ROUTINE_META } from "@/server/training/routine";
 import { addDaysKey, dateKey, daysBetween, todayKey, weekRange } from "@/lib/dates";
 import { round2 } from "@/lib/money";
 import { dateSchema } from "./tasks";
+import { emitDomainEvent } from "@/server/events/bus";
 
 // ---------- Seeding the attached routine (idempotent) ----------
 export async function seedRoutine(userId: string, startDate?: string) {
@@ -206,10 +207,17 @@ export async function updateSession(userId: string, id: string, input: z.infer<t
     patch.durationMinutes = input.durationMinutes ?? Math.max(1, Math.round((Date.now() - cur.startedAt.getTime()) / 60000));
   } else if (finished === false) patch.finishedAt = null;
   const [s] = await db.update(workoutSessions).set(patch).where(eq(workoutSessions.id, id)).returning();
+  if (finished && !cur.finishedAt) {
+    const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(workoutSets).where(and(eq(workoutSets.sessionId, id), eq(workoutSets.isWarmup, false)));
+    await emitDomainEvent(userId, { type: "workout.finished", sessionId: id, date: s.date, sets: Number(n) });
+  } else if (finished === false && cur.finishedAt) {
+    await emitDomainEvent(userId, { type: "workout.changed", sessionId: id, date: s.date, reason: "reopened" });
+  }
   return s;
 }
 export async function deleteSession(userId: string, id: string) {
-  await db.delete(workoutSessions).where(and(eq(workoutSessions.id, id), eq(workoutSessions.userId, userId)));
+  const [gone] = await db.delete(workoutSessions).where(and(eq(workoutSessions.id, id), eq(workoutSessions.userId, userId))).returning({ date: workoutSessions.date });
+  if (gone) await emitDomainEvent(userId, { type: "workout.changed", sessionId: id, date: gone.date, reason: "session_deleted" });
 }
 
 export const setSchema = z.object({
@@ -243,16 +251,19 @@ export async function logSet(userId: string, input: z.infer<typeof setSchema>, t
   }
   const [set] = await db.insert(workoutSets).values({ userId, sessionId: session.id, exerciseId, setNumber, weightKg: input.weightKg, reps: input.reps, seconds: input.seconds, rpe: input.rpe, isWarmup: input.isWarmup, notes: input.notes, source: input.source }).returning();
   const prs = input.isWarmup ? [] : await updatePersonalRecords(userId, exerciseId, set);
+  if (!input.isWarmup) await emitDomainEvent(userId, { type: "workout.changed", sessionId: session.id, date: session.date, reason: "set_logged" }, { tz });
   return { set, session, newRecords: prs };
 }
 export async function updateSet(userId: string, id: string, input: Partial<z.infer<typeof setSchema>>) {
   const { sessionId: _s, exerciseId: _e, exercise: _x, date: _d, source: _src, ...rest } = input;
   const [s] = await db.update(workoutSets).set(rest).where(and(eq(workoutSets.id, id), eq(workoutSets.userId, userId))).returning();
   if (!s) throw notFound("Set");
+  await emitDomainEvent(userId, { type: "workout.changed", sessionId: s.sessionId, date: null, reason: "set_updated" });
   return s;
 }
 export async function deleteSet(userId: string, id: string) {
-  await db.delete(workoutSets).where(and(eq(workoutSets.id, id), eq(workoutSets.userId, userId)));
+  const [gone] = await db.delete(workoutSets).where(and(eq(workoutSets.id, id), eq(workoutSets.userId, userId))).returning({ sessionId: workoutSets.sessionId });
+  if (gone) await emitDomainEvent(userId, { type: "workout.changed", sessionId: gone.sessionId, date: null, reason: "set_deleted" });
 }
 
 export async function getSession(userId: string, id: string) {

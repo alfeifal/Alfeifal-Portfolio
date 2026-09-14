@@ -40,7 +40,7 @@ export async function dashboardData(user: SessionUser) {
     has("finance") ? financialSummary(user.id, { from: format(m.start, "yyyy-MM-dd"), to: format(m.end, "yyyy-MM-dd") }) : null,
     has("finance") ? listTransactions(user.id, { limit: 6 }) : [],
     has("finance") ? listSavingsGoals(user.id) : [],
-    has("goals") ? listGoals(user.id, "active") : [],
+    has("goals") ? listGoals(user.id, "active", tz) : [],
     has("projects") ? listProjects(user.id, "active") : [],
     has("investing") ? portfolio(user.id).catch(() => null) : null,
     has("trading") ? listTrades(user.id, { status: "open", limit: 10 }) : [],
