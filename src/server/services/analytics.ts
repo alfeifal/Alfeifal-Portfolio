@@ -47,7 +47,7 @@ export async function analyticsOverview(userId: string, period: Period, tz?: str
     .orderBy(sql`1`);
   return {
     period, range, previousRange: prev,
-    finance: { current: { income: finance.income, expenses: finance.expenses, net: finance.net, savingsRate: finance.savingsRate, byCategory: finance.byCategory }, previous: { income: financePrev.income, expenses: financePrev.expenses, net: financePrev.net }, monthly: months, netWorth: finance.netWorth },
+    finance: { current: { income: finance.income, expenses: finance.expenses, net: finance.net, savingsRate: finance.savingsRate, byCategory: finance.byCategory }, previous: { income: financePrev.income, expenses: financePrev.expenses, net: financePrev.net }, monthly: months, financeBalance: finance.financeBalance },
     training: { current: training, previous: { sessions: trainingPrev.sessions, volume: trainingPrev.volume, sets: trainingPrev.sets } },
     studies: { current: studies, previous: { totalMinutes: studiesPrev.totalMinutes } },
     german,

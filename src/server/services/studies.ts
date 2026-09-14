@@ -2,9 +2,14 @@ import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/server/db";
 import { assignments, exams, studySessions, subjects } from "@/server/db/schema";
-import { notFound } from "@/server/http";
+import { badRequest, notFound } from "@/server/http";
 import { dateSchema } from "./tasks";
 import { todayKey } from "@/lib/dates";
+import { recordGermanEvent } from "./german";
+
+/** Slug of the bootstrapped German subject: study activity for it is owned by the German bridge (see logStudySession). */
+export const GERMAN_SUBJECT_SLUG = "german";
+const GERMAN_NAMES = /^(german|alem[aá]n|deutsch)$/i;
 
 export const subjectSchema = z.object({
   name: z.string().min(1).max(100),
@@ -51,6 +56,11 @@ export async function resolveSubject(userId: string, ref: { subjectId?: string |
     if (s) return s.id;
   }
   if (ref.subject) {
+    // "German" / "alemán" / "Deutsch" all mean the integrated German subject — never a second, disconnected subject.
+    if (GERMAN_NAMES.test(ref.subject.trim())) {
+      const [g] = await db.select({ id: subjects.id }).from(subjects).where(and(eq(subjects.userId, userId), eq(subjects.slug, GERMAN_SUBJECT_SLUG))).limit(1);
+      if (g) return g.id;
+    }
     const [s] = await db.select({ id: subjects.id }).from(subjects).where(and(eq(subjects.userId, userId), sql`lower(${subjects.name}) = lower(${ref.subject})`)).limit(1);
     if (s) return s.id;
     const created = await createSubject(userId, { name: ref.subject, kind: "subject" });
@@ -73,11 +83,37 @@ export async function listStudySessions(userId: string, filter: { from?: string;
     .limit(filter.limit ?? 200)
     .then((r) => r.map((x) => ({ ...x.s, subjectName: x.subjectName })));
 }
+async function isGermanSubject(userId: string, subjectId: string) {
+  const [s] = await db.select({ slug: subjects.slug }).from(subjects).where(and(eq(subjects.id, subjectId), eq(subjects.userId, userId))).limit(1);
+  return s?.slug === GERMAN_SUBJECT_SLUG;
+}
+
+/** Plain insert with no cross-module effects. Only the German bridge should call this directly; everything else goes through logStudySession. */
+export async function insertStudySession(userId: string, input: Omit<z.infer<typeof studySessionSchema>, "subject"> & { subjectId: string | null }, tz?: string) {
+  const [s] = await db.insert(studySessions).values({ ...input, userId, date: input.date ?? todayKey(tz) }).returning();
+  return s;
+}
+
+/**
+ * Log a study session. German has a single source of truth: when the subject is the German subject
+ * (by id, slug or name) the session is recorded through the German bridge (`recordGermanEvent`), so a
+ * session logged from Studies or by the AI produces exactly the same state (german_events → study_session
+ * → goal progress) as a lesson done in the German module. Never two paths, never two rows.
+ */
 export async function logStudySession(userId: string, input: z.infer<typeof studySessionSchema>, tz?: string) {
   const subjectId = await resolveSubject(userId, input);
   const { subject: _s, ...rest } = input;
-  const [s] = await db.insert(studySessions).values({ ...rest, subjectId, userId, date: input.date ?? todayKey(tz) }).returning();
-  return s;
+  if (subjectId && (await isGermanSubject(userId, subjectId))) {
+    const r = await recordGermanEvent(
+      userId,
+      { kind: "session", label: rest.topic ?? null, durationSec: rest.durationMinutes * 60, data: rest.notes ? { notes: rest.notes } : undefined },
+      tz,
+      { source: rest.source, date: rest.date, startedAt: rest.startedAt, notes: rest.notes, subjectId },
+    );
+    if (!r.session) throw badRequest("German study session could not be recorded");
+    return r.session;
+  }
+  return insertStudySession(userId, { ...rest, subjectId }, tz);
 }
 export async function deleteStudySession(userId: string, id: string) {
   await db.delete(studySessions).where(and(eq(studySessions.id, id), eq(studySessions.userId, userId)));

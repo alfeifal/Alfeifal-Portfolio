@@ -51,6 +51,28 @@ AI tools) and functions that take `userId` first. Cross-module effects live here
 `german.recordGermanEvent` → study session → goal progress; `training.logSet` → personal records;
 `finance.processRecurring` → transactions.
 
+### Integration rules (phase 1)
+- **German has one write path.** `german.recordGermanEvent` is the only function that records German
+  learning activity: `german_events` row → one `study_sessions` row on the `german` subject (linked
+  `{ type: "german_event", id }`) → minutes added to active goals with category `german` and unit `min`.
+  The German module UI posts to `/api/german/events`; `studies.logStudySession` detects the German
+  subject (by id, slug, or the names *German / alemán / Deutsch*) and delegates to the same bridge, so
+  "he estudiado alemán 45 minutos" typed to the assistant and a lesson finished in the module produce
+  identical state in German, Studies, Goals, Analytics, Reviews and Home. Identical events delivered
+  twice within 90 s are recorded once. `source` is `user` for module activity, `ai` for the assistant.
+- **A workout is a session with at least one working set.** `workoutStatus` = `started` (open, no
+  sets) · `in_progress` (sets, open) · `completed` (sets, closed) · `empty` (closed, no sets). Home,
+  Analytics, Reviews and `trainingStats` only count sessions with sets; empty ones are reported
+  separately (`emptySessions`). Home's training metric is `weeklyTrainingStatus`: workouts this ISO
+  week vs the training days the routine's cycle places in that week (no plan → no target invented).
+- **Finance balance is not net worth.** `financialSummary.financeBalance` is the balance of Finance
+  accounts only (labelled "Cash (Finance)"). Investing and trading (real and paper) are always shown
+  separately and never summed into it.
+- **Audit policy for non-CRUD writes.** Audited: workout session start/finish/delete, German events,
+  nutrition goals, preferences (keys only), notification settings. Not audited on purpose:
+  `PUT /api/german/state` — the module persists its whole state on every change; the row's
+  `revision`/`updatedAt` is the change trail (see the route comment).
+
 ## AI layer (`src/server/ai`)
 - `registry.ts` — `defineTool({ name, module, risk, schema, run, needsConfirmation, summarize })`.
   Adding a tool is one call; `tools/index.ts` imports every tool file.

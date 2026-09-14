@@ -9,7 +9,7 @@ import { useShell } from "@/components/shell/Shell";
 import type { Transaction } from "@/lib/types";
 import { MiniBars } from "@/components/charts";
 
-interface Summary { range: { from: string; to: string }; income: number; expenses: number; net: number; savingsRate: number | null; byCategory: { categoryId: string | null; name: string; total: number; count: number }[]; budgets: { id: string; name: string; amount: number; spent: number; remaining: number; pct: number; categoryId: string | null }[]; accounts: { id: string; name: string; type: string; balance: number; isDefault: boolean }[]; netWorth: number; daily: { date: string; type: string; total: number }[]; monthly: { month: string; income: number; expenses: number }[] }
+interface Summary { range: { from: string; to: string }; income: number; expenses: number; net: number; savingsRate: number | null; byCategory: { categoryId: string | null; name: string; total: number; count: number }[]; budgets: { id: string; name: string; amount: number; spent: number; remaining: number; pct: number; categoryId: string | null }[]; accounts: { id: string; name: string; type: string; balance: number; isDefault: boolean }[]; financeBalance: number; daily: { date: string; type: string; total: number }[]; monthly: { month: string; income: number; expenses: number }[] }
 interface Category { id: string; name: string; kind: string }
 interface Recurring { id: string; type: string; amount: number; description: string; frequency: string; nextDate: string; active: boolean }
 interface Savings { id: string; name: string; targetAmount: number; currentAmount: number; deadline: string | null }
@@ -66,7 +66,7 @@ export default function FinancePage() {
             <Stat label="Income" count={s.income} format={(v) => fmtMoney(v, cur)} tone="positive" />
             <Stat label="Expenses" count={s.expenses} format={(v) => fmtMoney(v, cur)} tone="negative" />
             <Stat label="Net" count={s.net} format={(v) => fmtMoney(v, cur)} sub={s.savingsRate != null ? `savings rate ${s.savingsRate}%` : "no income"} />
-            <Stat label="Net worth" count={s.netWorth} format={(v) => fmtMoney(v, cur)} sub={`${s.accounts.length} accounts`} />
+            <Stat label="Cash (Finance)" count={s.financeBalance} format={(v) => fmtMoney(v, cur)} sub={`${s.accounts.length} accounts · excludes investing & trading`} />
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <Card title="Spending by category">

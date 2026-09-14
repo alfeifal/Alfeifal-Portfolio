@@ -8,8 +8,8 @@ export interface DashboardData {
   today: string; widgets: string[]; unreadNotifications: number;
   tasks: { today: Task[]; overdue: Task[]; counts: { today: number; overdue: number; open: number } };
   events: EventItem[];
-  training: { workout: { dayIndex: number; day: { name: string; isRest: boolean; notes: string | null; exercises: unknown[] } | null; session: { id: string; finishedAt: string | null } | null } | null; recent: { id: string; date: string; dayName: string | null; sets: number; volume: number }[] };
-  finance: { income: number; expenses: number; net: number; savingsRate: number | null; byCategory: { name: string; total: number }[]; budgets: unknown[]; netWorth: number; accounts: unknown[]; recent: Transaction[]; savings: { id: string; name: string; currentAmount: number; targetAmount: number }[] } | null;
+  training: { workout: { dayIndex: number; day: { name: string; isRest: boolean; notes: string | null; exercises: unknown[] } | null; session: { id: string; finishedAt: string | null } | null } | null; recent: { id: string; date: string; dayName: string | null; sets: number; volume: number; status: "started" | "in_progress" | "completed" | "empty"; isWorkout: boolean }[]; week: { from: string; to: string; completed: number; sessions: number; emptySessions: number; plannedDays: number | null; plannedSoFar: number | null } | null };
+  finance: { income: number; expenses: number; net: number; savingsRate: number | null; byCategory: { name: string; total: number }[]; budgets: unknown[]; financeBalance: number; accounts: unknown[]; recent: Transaction[]; savings: { id: string; name: string; currentAmount: number; targetAmount: number }[] } | null;
   goals: Goal[]; projects: Project[];
   investing: { totalValue: number; totalCost: number; unrealized: number; cash: number; positions: { asset: { id: string; symbol: string }; value: number | null }[]; unpriced: string[] } | null;
   trading: { openTrades: { id: string; symbol: string; direction: string; mode: string }[]; watchlists: { items: { symbol: string }[] }[]; economicEvents: { id: string; title: string }[] };

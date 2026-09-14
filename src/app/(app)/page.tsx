@@ -72,8 +72,8 @@ export default function HomePage() {
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                 <Stat label="Net this month" count={d.finance.net} format={(v) => fmtMoney(v, cur)} tone={d.finance.net >= 0 ? "positive" : "negative"} sub={d.finance.savingsRate != null ? `savings rate ${d.finance.savingsRate}%` : "no income yet"} href="/finance" />
                 <Stat label="Tasks today" count={d.tasks.counts.today} format={(v) => String(Math.round(v))} sub={`${d.tasks.counts.overdue} overdue · ${d.tasks.counts.open} open`} tone={d.tasks.counts.overdue ? "warning" : undefined} href="/tasks" />
-                <Stat label="Workouts (recent)" count={d.training.recent.length} format={(v) => String(Math.round(v))} sub={d.training.workout?.day ? (d.training.workout.day.isRest ? "rest day" : `today: ${d.training.workout.day.name}`) : "no plan"} href="/training" />
-                <Stat label="Net worth" count={d.finance.netWorth} format={(v) => fmtMoney(v, cur)} sub={`${d.finance.accounts.length} accounts`} href="/finance" />
+                <Stat label="Workouts this week" count={d.training.week?.completed ?? 0} format={(v) => String(Math.round(v))} tone={d.training.week && d.training.week.plannedSoFar != null && d.training.week.completed < d.training.week.plannedSoFar ? "warning" : undefined} sub={d.training.week?.plannedDays != null ? `${d.training.week.completed}/${d.training.week.plannedDays} training days in cycle${d.training.workout?.day ? ` · today: ${d.training.workout.day.isRest ? "rest" : d.training.workout.day.name}` : ""}` : "no active plan"} href="/training" />
+                <Stat label="Cash (Finance)" count={d.finance.financeBalance} format={(v) => fmtMoney(v, cur)} sub={`${d.finance.accounts.length} accounts · excludes investing & trading`} href="/finance" />
               </div>
             </StaggerItem>
           )}
@@ -129,7 +129,7 @@ export default function HomePage() {
               )}
               {has("training") && (
                 <Card title="Training" href="/training" kind="interactive">
-                  {d.training.recent.length === 0 ? <p className="text-sm muted">No workouts logged yet. <Link className="link" href="/training">Open today&apos;s workout</Link>.</p> : <ul className="divide-y divide-border text-sm">{d.training.recent.map((s) => <li key={s.id} className="flex justify-between py-1"><Link href={`/training/sessions/${s.id}`} className="truncate hover:underline">{fmtDate(s.date)} · {s.dayName ?? "Workout"}</Link><span className="muted text-xs tnum">{s.sets} sets · {fmtNum(s.volume, 0)} kg</span></li>)}</ul>}
+                  {d.training.recent.length === 0 ? <p className="text-sm muted">No workouts logged yet. <Link className="link" href="/training">Open today&apos;s workout</Link>.</p> : <ul className="divide-y divide-border text-sm">{d.training.recent.map((s) => <li key={s.id} className="flex justify-between py-1"><Link href={`/training/sessions/${s.id}`} className="truncate hover:underline">{fmtDate(s.date)} · {s.dayName ?? "Workout"}</Link><span className="muted text-xs tnum">{s.isWorkout ? <>{s.sets} sets · {fmtNum(s.volume, 0)} kg</> : s.status === "started" ? "open · no sets" : "no sets logged"}</span></li>)}</ul>}
                 </Card>
               )}
               {has("studies") && d.studies && (

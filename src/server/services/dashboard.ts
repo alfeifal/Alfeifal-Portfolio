@@ -1,7 +1,7 @@
 import type { SessionUser } from "@/server/auth/session";
 import { listTasks, taskCounts } from "./tasks";
 import { listEvents } from "./calendar";
-import { workoutForDate, workoutHistory } from "./training";
+import { weeklyTrainingStatus, workoutForDate, workoutHistory } from "./training";
 import { financialSummary, listTransactions, listSavingsGoals, processRecurring } from "./finance";
 import { listGoals } from "./goals";
 import { listProjects } from "./projects";
@@ -29,13 +29,14 @@ export async function dashboardData(user: SessionUser) {
   const widgets = ((prefs.dashboard as { widgets?: Widget[] } | undefined)?.widgets ?? [...DEFAULT_WIDGETS]).filter((w) => DEFAULT_WIDGETS.includes(w));
   await Promise.all([processRecurring(user.id, tz).catch(() => 0), generateNotifications(user.id, tz).catch(() => 0)]);
   const has = (w: Widget) => widgets.includes(w);
-  const [tasksToday, overdue, counts, events, workout, recentWorkouts, finance, recentTx, savings, goals, projects, port, openTrades, watchlists, news, econ, study, exams, nutrition, german, unread] = await Promise.all([
+  const [tasksToday, overdue, counts, events, workout, recentWorkouts, week, finance, recentTx, savings, goals, projects, port, openTrades, watchlists, news, econ, study, exams, nutrition, german, unread] = await Promise.all([
     listTasks(user.id, { view: "today", tz, limit: 12 }),
     listTasks(user.id, { view: "overdue", tz, limit: 12 }),
     taskCounts(user.id, tz),
     listEvents(user.id, { from: new Date(today + "T00:00:00"), to: new Date(addDaysKey(today, 1) + "T23:59:59") }),
     has("training") || has("today") ? workoutForDate(user.id, today) : null,
     has("training") ? workoutHistory(user.id, { limit: 5 }) : [],
+    has("training") || has("today") ? weeklyTrainingStatus(user.id, tz) : null,
     has("finance") ? financialSummary(user.id, { from: format(m.start, "yyyy-MM-dd"), to: format(m.end, "yyyy-MM-dd") }) : null,
     has("finance") ? listTransactions(user.id, { limit: 6 }) : [],
     has("finance") ? listSavingsGoals(user.id) : [],
@@ -56,8 +57,8 @@ export async function dashboardData(user: SessionUser) {
     today, widgets, unreadNotifications: unread,
     tasks: { today: tasksToday, overdue, counts },
     events,
-    training: { workout, recent: recentWorkouts },
-    finance: finance ? { income: finance.income, expenses: finance.expenses, net: finance.net, savingsRate: finance.savingsRate, byCategory: finance.byCategory.slice(0, 5), budgets: finance.budgets, netWorth: finance.netWorth, accounts: finance.accounts, recent: recentTx, savings } : null,
+    training: { workout, recent: recentWorkouts, week },
+    finance: finance ? { income: finance.income, expenses: finance.expenses, net: finance.net, savingsRate: finance.savingsRate, byCategory: finance.byCategory.slice(0, 5), budgets: finance.budgets, financeBalance: finance.financeBalance, accounts: finance.accounts, recent: recentTx, savings } : null,
     goals: goals.slice(0, 8),
     projects: projects.slice(0, 8),
     investing: port ? { totalValue: port.totalValue, totalCost: port.totalCost, unrealized: port.unrealized, cash: port.cash, positions: port.positions.slice(0, 6), unpriced: port.unpriced } : null,

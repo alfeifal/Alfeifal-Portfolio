@@ -23,7 +23,7 @@ defineTool({
 defineTool({
   name: "create_event", module: "calendar", risk: "low",
   description: "Create a calendar event. kind: work | training | study | german | personal | deadline | reminder | event. Use ISO datetimes in the user's local time (e.g. 2026-09-15T10:00:00).",
-  schema: z.object({ title: z.string(), kind: cal.eventKindSchema.default("event"), startAt: z.string(), endAt: z.string().optional(), allDay: z.boolean().default(false), description: z.string().optional(), location: z.string().optional(), taskId: z.string().uuid().optional(), reminderMinutes: z.number().int().optional() }),
+  schema: z.object({ title: z.string(), kind: cal.eventKindSchema.default("event"), startAt: z.string(), endAt: z.string().optional(), allDay: z.boolean().default(false), description: z.string().optional(), location: z.string().optional(), taskId: z.string().uuid().optional(), projectId: z.string().uuid().optional(), goalId: z.string().uuid().optional(), reminderMinutes: z.number().int().optional() }),
   summarize: (i) => `create_event — ${i.title} — ${i.startAt}`,
   run: (i, ctx) => cal.createEvent(ctx.user.id, cal.eventCreateSchema.parse({ ...i, source: "ai" })),
 });
@@ -35,5 +35,5 @@ defineTool({
   summarize: (i) => `create_events — ${i.events.length} events`,
   run: async (i, ctx) => { const out = []; for (const e of i.events) out.push(await cal.createEvent(ctx.user.id, cal.eventCreateSchema.parse({ ...e, source: "ai" }))); return out; },
 });
-defineTool({ name: "update_event", module: "calendar", risk: "low", description: "Update an event by id (move, rename, resize).", schema: z.object({ id: z.string().uuid(), title: z.string().optional(), startAt: z.string().optional(), endAt: z.string().optional(), kind: cal.eventKindSchema.optional(), description: z.string().optional(), location: z.string().optional() }), summarize: (i) => `update_event — ${i.id.slice(0, 8)}`, run: ({ id, ...rest }, ctx) => cal.updateEvent(ctx.user.id, id, cal.eventUpdateSchema.parse(rest)) });
+defineTool({ name: "update_event", module: "calendar", risk: "low", description: "Update an event by id (move, rename, resize).", schema: z.object({ id: z.string().uuid(), title: z.string().optional(), startAt: z.string().optional(), endAt: z.string().optional(), kind: cal.eventKindSchema.optional(), description: z.string().optional(), location: z.string().optional(), taskId: z.string().uuid().nullable().optional(), projectId: z.string().uuid().nullable().optional(), goalId: z.string().uuid().nullable().optional() }), summarize: (i) => `update_event — ${i.id.slice(0, 8)}`, run: ({ id, ...rest }, ctx) => cal.updateEvent(ctx.user.id, id, cal.eventUpdateSchema.parse(rest)) });
 defineTool({ name: "delete_event", module: "calendar", risk: "medium", description: "Delete an event by id. Requires confirmation.", schema: z.object({ id: z.string().uuid() }), needsConfirmation: (i) => `Delete event ${i.id.slice(0, 8)}`, summarize: (i) => `delete_event — ${i.id.slice(0, 8)}`, run: async ({ id }, ctx) => { await cal.deleteEvent(ctx.user.id, id); return { deleted: id }; } });

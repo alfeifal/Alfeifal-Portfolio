@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/server/db";
 import { tasks } from "@/server/db/schema";
@@ -131,6 +131,6 @@ export async function taskCounts(userId: string, tz?: string) {
       open: sql<number>`count(*)`,
     })
     .from(tasks)
-    .where(and(eq(tasks.userId, userId), open, or(isNull(tasks.dueDate), lte(tasks.dueDate, "9999-12-31"))));
+    .where(and(eq(tasks.userId, userId), open));
   return { today: Number(row.today), overdue: Number(row.overdue), open: Number(row.open) };
 }

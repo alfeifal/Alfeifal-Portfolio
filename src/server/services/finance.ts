@@ -187,8 +187,9 @@ export async function financialSummary(userId: string, range: { from: string; to
     return { id: r.b.id, categoryId: r.b.categoryId, name: r.categoryName ?? "Total", amount: r.b.amount, period: r.b.period, spent: round2(spent), remaining: round2(r.b.amount - spent), pct: r.b.amount > 0 ? Math.round((spent / r.b.amount) * 100) : 0 };
   });
   const accts = await listAccounts(userId);
-  const netWorth = round2(accts.reduce((a, b) => a + (b.type === "credit" ? -b.balance : b.balance), 0));
-  return { range, income: round2(income), expenses: round2(expenses), net, savingsRate, byCategory, budgets: budgetStatus, accounts: accts, netWorth, source: "calculated" as const };
+  // Balance of Finance accounts only (credit accounts subtract). Investing and trading are separate modules and are never folded in here.
+  const financeBalance = round2(accts.reduce((a, b) => a + (b.type === "credit" ? -b.balance : b.balance), 0));
+  return { range, income: round2(income), expenses: round2(expenses), net, savingsRate, byCategory, budgets: budgetStatus, accounts: accts, financeBalance, source: "calculated" as const };
 }
 
 /** Daily totals for charts. */

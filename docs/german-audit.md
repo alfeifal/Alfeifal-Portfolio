@@ -34,6 +34,10 @@ export/import — is the original code.
 ## Connections to the OS
 `recordGermanEvent` (server) turns a session event into a **study session** for the `German`
 subject (slug `german`), adds the minutes to any active **goal** with category `german` and unit
-`min`, and feeds **Analytics** and the **weekly/daily reviews**. The assistant answers "How much
+`min`, and feeds **Analytics** and the **weekly/daily reviews**. It is the *only* write path for
+German activity: `logStudySession` (Studies UI and the AI's `log_study_session`) delegates to it
+whenever the subject is German, so both directions produce the same rows (`source` = `user` from the
+module, `ai` from the assistant) and duplicates within 90 s are ignored. The module itself is never
+written to by the server or the AI; its progress state stays the module's own. The assistant answers "How much
 German did I study this week?", "What lesson should I do next?" through `get_german_progress`,
 and "Test me" by pointing at the module's exam modes.

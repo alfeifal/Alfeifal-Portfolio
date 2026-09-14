@@ -4,7 +4,7 @@ import { db } from "@/server/db";
 import { exercises, personalRecords, trainingDayExercises, trainingDays, trainingPlans, workoutSessions, workoutSets } from "@/server/db/schema";
 import { badRequest, notFound } from "@/server/http";
 import { ROUTINE_DAYS, ROUTINE_META } from "@/server/training/routine";
-import { daysBetween, todayKey } from "@/lib/dates";
+import { addDaysKey, dateKey, daysBetween, todayKey, weekRange } from "@/lib/dates";
 import { round2 } from "@/lib/money";
 import { dateSchema } from "./tasks";
 
@@ -269,6 +269,17 @@ async function getDayDetail(dayId: string) {
   return { ...d, exercises: list.map((x) => ({ ...x.tde, exercise: x.exercise })) };
 }
 
+/**
+ * A session row is only a container. "started" = opened without work; "in_progress" = working sets logged, not closed;
+ * "completed" = closed with at least one working set; "empty" = closed without any working set (not a workout).
+ * Only sessions with working sets count as workouts anywhere (Home, Analytics, Reviews).
+ */
+export type WorkoutStatus = "started" | "in_progress" | "completed" | "empty";
+export function workoutStatus(s: { finishedAt: Date | string | null; sets: number }): WorkoutStatus {
+  if (s.sets > 0) return s.finishedAt ? "completed" : "in_progress";
+  return s.finishedAt ? "empty" : "started";
+}
+
 export async function workoutHistory(userId: string, opts: { limit?: number; from?: string; to?: string } = {}) {
   const conds = [eq(workoutSessions.userId, userId)];
   if (opts.from) conds.push(gte(workoutSessions.date, opts.from));
@@ -284,7 +295,35 @@ export async function workoutHistory(userId: string, opts: { limit?: number; fro
     .where(and(...conds))
     .orderBy(desc(workoutSessions.date), desc(workoutSessions.startedAt))
     .limit(opts.limit ?? 50);
-  return rows.map((r) => ({ ...r.s, sets: Number(r.sets), volume: round2(Number(r.volume)), exercisesDone: Number(r.exercisesDone) }));
+  return rows.map((r) => {
+    const sets = Number(r.sets);
+    const status = workoutStatus({ finishedAt: r.s.finishedAt, sets });
+    return { ...r.s, sets, volume: round2(Number(r.volume)), exercisesDone: Number(r.exercisesDone), status, isWorkout: sets > 0 };
+  });
+}
+
+/**
+ * Current ISO week (Mon–Sun, user's timezone): workouts done (distinct days with working sets) vs the
+ * training days the active plan's cycle places in this week. No plan → plannedDays null (no invented target).
+ */
+export async function weeklyTrainingStatus(userId: string, tz?: string) {
+  const today = todayKey(tz);
+  const { start } = weekRange(new Date(today + "T12:00:00"));
+  const from = dateKey(start);
+  const to = addDaysKey(from, 6);
+  const [plan, sessions] = await Promise.all([getPlanWithDays(userId), workoutHistory(userId, { from, to, limit: 100 })]);
+  const workouts = sessions.filter((s) => s.isWorkout);
+  const completedDays = new Set(workouts.map((s) => s.date)).size;
+  let plannedDays: number | null = null;
+  let plannedSoFar: number | null = null;
+  if (plan) {
+    plannedDays = 0; plannedSoFar = 0;
+    for (let d = from; d <= to; d = addDaysKey(d, 1)) {
+      const day = plan.days.find((x) => x.dayIndex === cycleDayIndex(plan, d));
+      if (day && !day.isRest) { plannedDays++; if (d <= today) plannedSoFar++; }
+    }
+  }
+  return { from, to, completed: completedDays, sessions: workouts.length, emptySessions: sessions.length - workouts.length, plannedDays, plannedSoFar, source: "calculated" as const };
 }
 
 /** Last performance for each exercise of a day (to compare against previous sessions). */
@@ -366,22 +405,32 @@ export async function listPersonalRecords(userId: string) {
 }
 
 export async function trainingStats(userId: string, range: { from: string; to: string }) {
-  const [row] = await db
+  // Per-session aggregates first, so a session's duration is counted once and empty sessions can be told apart.
+  const per = db
     .select({
-      sessions: sql<number>`count(distinct ${workoutSessions.id})`,
-      sets: sql<number>`count(${workoutSets.id}) filter (where not ${workoutSets.isWarmup})`,
-      volume: sql<number>`coalesce(sum(coalesce(${workoutSets.weightKg},0) * coalesce(${workoutSets.reps},0)) filter (where not ${workoutSets.isWarmup}),0)`,
-      minutes: sql<number>`coalesce(sum(distinct ${workoutSessions.durationMinutes}),0)`,
+      id: workoutSessions.id,
+      date: workoutSessions.date,
+      minutes: workoutSessions.durationMinutes,
+      // Explicit table qualification: Drizzle leaves single-table columns unqualified, which would resolve "id" to workout_sets inside the correlated subquery.
+      sets: sql<number>`(select count(*) from workout_sets ws where ws.session_id = workout_sessions.id and not ws.is_warmup)`.as("sets"),
+      volume: sql<number>`(select coalesce(sum(coalesce(ws.weight_kg,0) * coalesce(ws.reps,0)),0) from workout_sets ws where ws.session_id = workout_sessions.id and not ws.is_warmup)`.as("volume"),
     })
     .from(workoutSessions)
-    .leftJoin(workoutSets, eq(workoutSets.sessionId, workoutSessions.id))
-    .where(and(eq(workoutSessions.userId, userId), gte(workoutSessions.date, range.from), lte(workoutSessions.date, range.to)));
-  const weekly = await db
-    .select({ week: sql<string>`to_char(date_trunc('week', ${workoutSessions.date}::date), 'IYYY-"W"IW')`, sessions: sql<number>`count(distinct ${workoutSessions.id})`, volume: sql<number>`coalesce(sum(coalesce(${workoutSets.weightKg},0) * coalesce(${workoutSets.reps},0)) filter (where not ${workoutSets.isWarmup}),0)` })
-    .from(workoutSessions)
-    .leftJoin(workoutSets, eq(workoutSets.sessionId, workoutSessions.id))
     .where(and(eq(workoutSessions.userId, userId), gte(workoutSessions.date, range.from), lte(workoutSessions.date, range.to)))
+    .as("per");
+  const [row] = await db
+    .select({
+      sessions: sql<number>`count(*) filter (where ${per.sets} > 0)`,
+      emptySessions: sql<number>`count(*) filter (where ${per.sets} = 0)`,
+      sets: sql<number>`coalesce(sum(${per.sets}),0)`,
+      volume: sql<number>`coalesce(sum(${per.volume}),0)`,
+      minutes: sql<number>`coalesce(sum(${per.minutes}) filter (where ${per.sets} > 0),0)`,
+    })
+    .from(per);
+  const weekly = await db
+    .select({ week: sql<string>`to_char(date_trunc('week', ${per.date}::date), 'IYYY-"W"IW')`, sessions: sql<number>`count(*) filter (where ${per.sets} > 0)`, volume: sql<number>`coalesce(sum(${per.volume}),0)` })
+    .from(per)
     .groupBy(sql`1`)
     .orderBy(sql`1`);
-  return { range, sessions: Number(row.sessions), sets: Number(row.sets), volume: round2(Number(row.volume)), minutes: Number(row.minutes), weekly: weekly.map((w) => ({ week: w.week, sessions: Number(w.sessions), volume: round2(Number(w.volume)) })), source: "calculated" as const };
+  return { range, sessions: Number(row.sessions), emptySessions: Number(row.emptySessions), sets: Number(row.sets), volume: round2(Number(row.volume)), minutes: Number(row.minutes), weekly: weekly.map((w) => ({ week: w.week, sessions: Number(w.sessions), volume: round2(Number(w.volume)) })), source: "calculated" as const };
 }
