@@ -10,6 +10,7 @@ import { buildSystemPrompt } from "./context";
 import { audit } from "@/server/audit";
 import { getPreferences } from "@/server/services/users";
 import { conversationExpiry, touchConversation } from "@/server/services/conversations";
+import { encodeEvent, type ChatStreamEvent } from "./stream";
 import "./tools"; // registers every tool
 
 const MAX_TOOL_ROUNDS = 8;
@@ -91,13 +92,21 @@ function truncate(v: unknown) {
   }
 }
 
+type Emit = (e: ChatStreamEvent) => void;
+const noEmit: Emit = () => {};
+
 /**
  * Chat with tool use. Tools run through `runTool` so every action is validated, risk-gated and logged.
  * The model is told explicitly when a tool failed or is awaiting confirmation, so it never claims success.
+ *
+ * One implementation serves both the plain and the streaming route: `emit` receives the assistant's text
+ * as it is produced when streaming, and does nothing otherwise. Messages are persisted once per round,
+ * never per chunk.
  */
-export async function chat(user: SessionUser, opts: { conversationId?: string | null; text: string; kind?: string; systemExtra?: string; maxRounds?: number; allowedTools?: string[] }): Promise<ChatResult> {
-  const client = anthropic();
+async function runChat(user: SessionUser, opts: { conversationId?: string | null; text: string; kind?: string; systemExtra?: string; maxRounds?: number; allowedTools?: string[]; stream?: boolean; client?: Pick<ReturnType<typeof anthropic>, "messages"> }, emit: Emit = noEmit): Promise<ChatResult> {
+  const client = opts.client ?? anthropic();
   const conv = await ensureConversation(user, opts.conversationId ?? null, opts.kind ?? "assistant", opts.text);
+  emit({ type: "start", conversationId: conv.id });
   const [userMsg] = await db.insert(messages).values({ conversationId: conv.id, role: "user", text: opts.text, content: [{ type: "text", text: opts.text }] }).returning();
   const system = await buildSystemPrompt(user, opts.systemExtra);
   const tools = anthropicTools().filter((t) => !opts.allowedTools || opts.allowedTools.includes(t.name));
@@ -109,7 +118,15 @@ export async function chat(user: SessionUser, opts: { conversationId?: string | 
   let lastAssistantId = userMsg.id;
 
   for (let round = 0; round <= (opts.maxRounds ?? MAX_TOOL_ROUNDS); round++) {
-    const res = await client.messages.create({ model: AI_MODEL(), max_tokens: 2048, system, tools, messages: transcript });
+    const params = { model: AI_MODEL(), max_tokens: 2048, system, tools, messages: transcript };
+    let res: Anthropic.Message;
+    if (opts.stream && typeof (client.messages as { stream?: unknown }).stream === "function") {
+      const s = client.messages.stream(params);
+      s.on("text", (delta: string) => { if (delta) emit({ type: "text", delta }); });
+      res = await s.finalMessage();
+    } else {
+      res = await client.messages.create(params);
+    }
     usage = { input: usage.input + res.usage.input_tokens, output: usage.output + res.usage.output_tokens };
     const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("\n").trim();
     const [assistantMsg] = await db.insert(messages).values({ conversationId: conv.id, role: "assistant", text, content: res.content, inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens }).returning();
@@ -122,15 +139,19 @@ export async function chat(user: SessionUser, opts: { conversationId?: string | 
     for (const tu of toolUses) {
       const tool = getTool(tu.name);
       if (!tool) { results.push({ type: "tool_result", tool_use_id: tu.id, is_error: true, content: `Unknown tool ${tu.name}` }); continue; }
+      emit({ type: "tool", name: tool.name });
       const action = await runTool(tool, tu.input, { user, conversationId: conv.id, messageId: assistantMsg.id, confirmed: false });
       if (action.status === "pending_confirmation") {
         pending.push(action);
+        emit({ type: "pending", action });
         results.push({ type: "tool_result", tool_use_id: tu.id, content: `NOT EXECUTED. This action requires the user's explicit confirmation (risk: ${tool.risk}). A confirmation card was shown to the user (action id ${action.logId}). Tell the user it is waiting for their confirmation; do NOT claim it was done.` });
       } else if (action.status === "failed") {
         actions.push(action);
+        emit({ type: "action", action });
         results.push({ type: "tool_result", tool_use_id: tu.id, is_error: true, content: `FAILED: ${action.error}. Tell the user clearly that this action failed and was not saved.` });
       } else {
         actions.push(action);
+        emit({ type: "action", action });
         results.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(action.result ?? null).slice(0, 30000) });
       }
     }
@@ -139,6 +160,38 @@ export async function chat(user: SessionUser, opts: { conversationId?: string | 
   }
   await touchConversation(conv.id); // every exchange slides the 24 h retention window forward
   return { conversationId: conv.id, messageId: lastAssistantId, text: finalText, actions, pending, usage };
+}
+
+export function chat(user: SessionUser, opts: { conversationId?: string | null; text: string; kind?: string; systemExtra?: string; maxRounds?: number; allowedTools?: string[] }): Promise<ChatResult> {
+  return runChat(user, opts);
+}
+
+/**
+ * Streaming turn. Returns the NDJSON body to hand back to the browser: the assistant's text arrives
+ * as it is generated, tool activity is announced by name only, and the turn ends with a `done` event
+ * (or an `error` one that says whether any text had already been delivered).
+ */
+export function chatStream(user: SessionUser, opts: { conversationId?: string | null; text: string; kind?: string; signal?: AbortSignal; client?: Pick<ReturnType<typeof anthropic>, "messages"> }) {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let delivered = false;
+      const send = (e: ChatStreamEvent) => {
+        if (e.type === "text") delivered = true;
+        try { controller.enqueue(encoder.encode(encodeEvent(e))); } catch { /* the client went away */ }
+      };
+      try {
+        const r = await runChat(user, { ...opts, stream: true }, send);
+        send({ type: "done", conversationId: r.conversationId, messageId: r.messageId, usage: r.usage });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error("[ai] stream failed", e);
+        send({ type: "error", message, partial: delivered });
+      } finally {
+        controller.close();
+      }
+    },
+  });
 }
 
 /** Executes a previously pending (medium/high-risk) action after the user confirmed it in the UI. */
