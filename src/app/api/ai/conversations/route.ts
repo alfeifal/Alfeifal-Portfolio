@@ -1,5 +1,4 @@
-import { desc, eq } from "drizzle-orm";
 import { json, withAuth } from "@/server/http";
-import { db } from "@/server/db";
-import { conversations } from "@/server/db/schema";
-export const GET = withAuth(async (_req, { user }) => json(await db.select().from(conversations).where(eq(conversations.userId, user.id)).orderBy(desc(conversations.updatedAt)).limit(50)));
+import { listActiveConversations } from "@/server/services/conversations";
+/** Only conversations still inside their 24 h window; expired transcripts are never listed. */
+export const GET = withAuth(async (_req, { user }) => json(await listActiveConversations(user.id)));

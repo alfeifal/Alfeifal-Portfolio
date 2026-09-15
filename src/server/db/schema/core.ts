@@ -1,5 +1,5 @@
 import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -83,8 +83,14 @@ export const conversations = pgTable(
     kind: text("kind").notNull().default("assistant"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * Chat transcripts are temporary: a conversation lives 24 h from its last message (sliding) and is
+     * then hard-deleted with its messages by the cron. Durable outcomes live elsewhere — ai_action_logs
+     * (unlinked by ON DELETE SET NULL, never deleted), ai_memory, ai_reports and the modules' own tables.
+     */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull().default(sql`now() + interval '24 hours'`),
   },
-  (t) => [index("ai_conv_user_idx").on(t.userId, t.updatedAt)],
+  (t) => [index("ai_conv_user_idx").on(t.userId, t.updatedAt), index("ai_conv_expires_idx").on(t.expiresAt)],
 );
 
 export const messageRoleEnum = pgEnum("message_role", ["user", "assistant", "tool", "system"]);

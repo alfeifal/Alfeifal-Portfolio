@@ -9,6 +9,7 @@ import { toInputSchema } from "./schema-json";
 import { buildSystemPrompt } from "./context";
 import { audit } from "@/server/audit";
 import { getPreferences } from "@/server/services/users";
+import { conversationExpiry, touchConversation } from "@/server/services/conversations";
 import "./tools"; // registers every tool
 
 const MAX_TOOL_ROUNDS = 8;
@@ -21,12 +22,13 @@ function anthropicTools(): Anthropic.Tool[] {
   return allTools().map((t) => ({ name: t.name, description: `[${t.module} · ${t.risk}] ${t.description}`, input_schema: toInputSchema(t.schema) as Anthropic.Tool.InputSchema }));
 }
 
+/** Continues the given conversation only while it is alive; an expired transcript starts a fresh one (never resurrected). */
 async function ensureConversation(user: SessionUser, conversationId: string | null, kind: string, firstUserText: string) {
   if (conversationId) {
     const [c] = await db.select().from(conversations).where(and(eq(conversations.id, conversationId), eq(conversations.userId, user.id)));
-    if (c) return c;
+    if (c && c.expiresAt > new Date()) return c;
   }
-  const [c] = await db.insert(conversations).values({ userId: user.id, kind, title: firstUserText.slice(0, 80) }).returning();
+  const [c] = await db.insert(conversations).values({ userId: user.id, kind, title: firstUserText.slice(0, 80), expiresAt: conversationExpiry() }).returning();
   return c;
 }
 
@@ -135,7 +137,7 @@ export async function chat(user: SessionUser, opts: { conversationId?: string | 
     await db.insert(messages).values({ conversationId: conv.id, role: "user", text: "", content: results });
     transcript.push({ role: "user", content: results });
   }
-  await db.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, conv.id));
+  await touchConversation(conv.id); // every exchange slides the 24 h retention window forward
   return { conversationId: conv.id, messageId: lastAssistantId, text: finalText, actions, pending, usage };
 }
 

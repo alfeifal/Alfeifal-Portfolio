@@ -7,6 +7,7 @@ import { generateNotifications } from "@/server/services/notifications";
 import { refreshNews, checkAlerts } from "@/server/services/market";
 import { snapshotPortfolio } from "@/server/services/investing";
 import { purgeExpiredSessions } from "@/server/auth/session";
+import { purgeExpiredConversations } from "@/server/services/conversations";
 
 /**
  * Scheduled maintenance (call hourly from Vercel Cron / GitHub Actions / any scheduler):
@@ -21,6 +22,7 @@ export async function POST(req: Request) {
   const report: Record<string, unknown> = { users: all.length };
   report.news = await refreshNews(true).catch((e) => `failed: ${(e as Error).message}`);
   await purgeExpiredSessions();
+  report.purgedConversations = await purgeExpiredConversations(); // chat transcripts older than 24 h; action logs, memory and reports are kept
   for (const u of all) {
     report[u.id] = {
       recurring: await processRecurring(u.id, u.timezone).catch(() => "failed"),
