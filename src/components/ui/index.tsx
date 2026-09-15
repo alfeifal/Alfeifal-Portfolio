@@ -130,19 +130,28 @@ export function Tabs<Tv extends string>({ value, onChange, options, id = "tabs" 
 type Variant = "primary" | "ghost" | "danger" | "subtle";
 type Size = "sm" | "md";
 export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> {
-  variant?: Variant; size?: Size; loading?: boolean; success?: boolean; icon?: ReactNode; children?: ReactNode;
+  variant?: Variant; size?: Size; loading?: boolean;
+  /** Label shown while loading. Defaults to the normal label, so the button never changes size. */
+  loadingText?: ReactNode; success?: boolean; icon?: ReactNode; children?: ReactNode;
 }
 /** Button with idle / hover / press / loading / success / disabled states (spec §8). */
-export function Button({ variant = "ghost", size = "md", loading, success, icon, children, className, disabled, ...rest }: ButtonProps) {
+export function Button({ variant = "ghost", size = "md", loading, loadingText, success, icon, children, className, disabled, ...rest }: ButtonProps) {
   const cls = cn(variant === "primary" && "btn-primary", variant === "ghost" && "btn-ghost", variant === "danger" && "btn-danger", variant === "subtle" && "btn-subtle", size === "sm" && "btn-sm", className);
+  // Idle and loading content share one grid cell, so the button keeps a single, stable box: its width is
+  // the wider of the two labels and nothing reflows, shifts or stacks when the state flips.
+  const cell = "col-start-1 row-start-1 inline-flex items-center gap-1.5 transition-opacity duration-150";
   return (
     <m.button whileTap={disabled || loading ? undefined : { scale: 0.97 }} transition={T.state} className={cls} disabled={disabled || loading} aria-busy={loading} {...(rest as object)}>
-      <AnimatePresence mode="wait" initial={false}>
-        {loading ? <m.span key="l" initial={{ opacity: 0, scale: 0.6 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.6 }} transition={T.state} className="inline-flex"><Loader2 size={14} className="animate-spin" /></m.span>
-          : success ? <m.span key="s" initial={{ opacity: 0, scale: 0.6 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.6 }} transition={T.state} className="inline-flex text-positive"><Check size={14} strokeWidth={3} /></m.span>
-          : icon ? <m.span key="i" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="inline-flex">{icon}</m.span> : null}
-      </AnimatePresence>
-      {children}
+      <span className="grid place-items-center">
+        <span className={cn(cell, loading && "opacity-0")} aria-hidden={loading}>
+          {success ? <Check size={14} strokeWidth={3} className="text-positive" /> : icon}
+          {children}
+        </span>
+        <span className={cn(cell, !loading && "opacity-0")} aria-hidden={!loading}>
+          <Loader2 size={14} className="animate-spin" />
+          {loadingText ?? children}
+        </span>
+      </span>
     </m.button>
   );
 }
