@@ -106,6 +106,28 @@ export default function HomePage() {
                   </div>
                 </Card>
               )}
+              {has("today") && (
+                <Card title="Plan for today" href="/planner" kind="interactive">
+                  {!d.plan?.day ? (
+                    <p className="text-sm muted">No plan yet. <Link className="link" href="/planner">Ask the assistant to plan your day</Link> — it saves a draft you accept.</p>
+                  ) : (
+                    <>
+                      <p className="mb-1.5 text-xs muted">
+                        <Badge tone={d.plan.day.status === "accepted" ? "positive" : d.plan.day.status === "draft" ? "warning" : undefined}>{d.plan.day.status === "draft" ? "waiting for you" : d.plan.day.status.replace("_", " ")}</Badge>
+                        {d.plan.day.pendingItems > 0 && <span className="ml-2">{d.plan.day.pendingItems} of {d.plan.day.items.length} still to accept</span>}
+                      </p>
+                      <ul className="space-y-1 text-sm">{d.plan.day.items.slice(0, 5).map((i) => (
+                        <li key={i.id} className="flex items-center gap-2">
+                          <span className={i.materialised ? "text-positive" : "muted"}>{i.materialised ? "✓" : "○"}</span>
+                          <span className="min-w-0 flex-1 truncate">{i.title}</span>
+                          <span className="shrink-0 text-xs muted">{i.materialised ? (i.kind === "task" ? "task" : i.kind === "event" ? "event" : "note") : i.status === "proposed" ? "pending" : i.status}</span>
+                        </li>
+                      ))}</ul>
+                      {d.plan.day.items.length > 5 && <p className="mt-1 text-xs muted">+{d.plan.day.items.length - 5} more in the <Link className="link" href="/planner">Planner</Link></p>}
+                    </>
+                  )}
+                </Card>
+              )}
               {has("finance") && d.finance && (
                 <Card title="Finance" href="/finance" kind="interactive">
                   <div className="mb-2 grid grid-cols-3 gap-2 text-center">

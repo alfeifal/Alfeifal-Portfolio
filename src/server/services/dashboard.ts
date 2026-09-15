@@ -16,6 +16,7 @@ import { addDaysKey, todayKey } from "@/lib/dates";
 import { monthRange } from "@/lib/dates";
 import { format } from "date-fns";
 import { getPreferences } from "./users";
+import { plannerSnapshot } from "./planner";
 
 export const DEFAULT_WIDGETS = ["today", "finance", "goals", "projects", "training", "studies", "investing", "trading", "news"] as const;
 export type Widget = (typeof DEFAULT_WIDGETS)[number];
@@ -29,11 +30,12 @@ export async function dashboardData(user: SessionUser) {
   const widgets = ((prefs.dashboard as { widgets?: Widget[] } | undefined)?.widgets ?? [...DEFAULT_WIDGETS]).filter((w) => DEFAULT_WIDGETS.includes(w));
   await Promise.all([processRecurring(user.id, tz).catch(() => 0), generateNotifications(user.id, tz).catch(() => 0)]);
   const has = (w: Widget) => widgets.includes(w);
-  const [tasksToday, overdue, counts, events, workout, recentWorkouts, week, finance, recentTx, savings, goals, projects, port, openTrades, watchlists, news, econ, study, exams, nutrition, german, unread] = await Promise.all([
+  const [tasksToday, overdue, counts, events, plan, workout, recentWorkouts, week, finance, recentTx, savings, goals, projects, port, openTrades, watchlists, news, econ, study, exams, nutrition, german, unread] = await Promise.all([
     listTasks(user.id, { view: "today", tz, limit: 12 }),
     listTasks(user.id, { view: "overdue", tz, limit: 12 }),
     taskCounts(user.id, tz),
     listEvents(user.id, { from: new Date(today + "T00:00:00"), to: new Date(addDaysKey(today, 1) + "T23:59:59") }),
+    has("today") ? plannerSnapshot(user.id, tz) : null,
     has("training") || has("today") ? workoutForDate(user.id, today) : null,
     has("training") ? workoutHistory(user.id, { limit: 5 }) : [],
     has("training") || has("today") ? weeklyTrainingStatus(user.id, tz) : null,
@@ -57,6 +59,7 @@ export async function dashboardData(user: SessionUser) {
     today, widgets, unreadNotifications: unread,
     tasks: { today: tasksToday, overdue, counts },
     events,
+    plan,
     training: { workout, recent: recentWorkouts, week },
     finance: finance ? { income: finance.income, expenses: finance.expenses, net: finance.net, savingsRate: finance.savingsRate, byCategory: finance.byCategory.slice(0, 5), budgets: finance.budgets, financeBalance: finance.financeBalance, accounts: finance.accounts, recent: recentTx, savings } : null,
     goals: goals.slice(0, 8),
