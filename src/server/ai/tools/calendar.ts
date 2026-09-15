@@ -6,7 +6,7 @@ import { addDaysKey, todayKey } from "@/lib/dates";
 
 defineTool({
   name: "get_calendar", module: "calendar", risk: "read",
-  description: "Events between two dates (inclusive). Defaults to the next 7 days. Also returns free slots per day (07:00–23:00).",
+  description: "Events between two dates (inclusive). Defaults to the next 7 days. Also returns free slots per day (07:00–23:00). The system-prompt snapshot only carries a clipped view of the near future, so call this for any date range, for full lists and for event ids.",
   schema: z.object({ from: dateSchema.optional(), to: dateSchema.optional(), includeFreeSlots: z.boolean().default(false) }),
   run: async (i, ctx) => {
     const from = i.from ?? todayKey(ctx.user.timezone);

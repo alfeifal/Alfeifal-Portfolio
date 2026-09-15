@@ -12,3 +12,4 @@ import "./investing";
 import "./market";
 import "./german";
 import "./memory";
+import "./snapshot";

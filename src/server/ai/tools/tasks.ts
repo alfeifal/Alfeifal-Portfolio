@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineTool } from "../registry";
 import * as t from "@/server/services/tasks";
 
-defineTool({ name: "get_tasks", module: "tasks", risk: "read", description: "List tasks. view: today | upcoming | overdue | completed | inbox (no date) | all.", schema: z.object({ view: z.enum(["today", "upcoming", "overdue", "completed", "inbox", "all"]).default("today"), projectId: z.string().uuid().optional(), goalId: z.string().uuid().optional(), limit: z.number().int().max(200).optional() }), run: (i, ctx) => t.listTasks(ctx.user.id, { ...i, tz: ctx.user.timezone }) });
+defineTool({ name: "get_tasks", module: "tasks", risk: "read", description: "List tasks. view: today | upcoming | overdue | completed | inbox (no date) | all. The system-prompt snapshot only carries the first few tasks of today and overdue, so call this for full lists, other views and task ids before concluding anything about what is pending.", schema: z.object({ view: z.enum(["today", "upcoming", "overdue", "completed", "inbox", "all"]).default("today"), projectId: z.string().uuid().optional(), goalId: z.string().uuid().optional(), limit: z.number().int().max(200).optional() }), run: (i, ctx) => t.listTasks(ctx.user.id, { ...i, tz: ctx.user.timezone }) });
 defineTool({
   name: "create_task", module: "tasks", risk: "low",
   description: "Create a task/reminder. recurrence: daily | weekdays | weekly | weekly:MO,WE | monthly | monthly:15 | yearly.",

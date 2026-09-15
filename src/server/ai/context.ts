@@ -1,32 +1,30 @@
 import type { SessionUser } from "@/server/auth/session";
 import { listMemory, touchMemories } from "@/server/services/memory";
-import { listTasks } from "@/server/services/tasks";
-import { listEvents } from "@/server/services/calendar";
-import { listGoals } from "@/server/services/goals";
-import { workoutForDate } from "@/server/services/training";
-import { financialSummary } from "@/server/services/finance";
+import { COMPACT_SECTIONS, fitToBudget, lifeSnapshot, renderCompact, SNAPSHOT_BUDGET_CHARS } from "@/server/services/snapshot";
 import { todayKey } from "@/lib/dates";
 import { UNITS } from "@/modules/german/content";
 
+/** Forward horizon of the compact snapshot: today plus the rest of this week and the next one. */
+export const CONTEXT_HORIZON_DAYS = 14;
+
 /**
  * Structured context (spec §8): profile + long-term memory + a compact "current state" snapshot.
- * Historical detail is fetched on demand through read tools, not stuffed into the prompt.
+ *
+ * The snapshot is deliberately bounded (see SNAPSHOT_BUDGET_CHARS): it covers tasks, calendar, goals,
+ * projects, training, studies, German, finance and which reviews exist, clipped to whole lines. Detail
+ * beyond that — history, other periods, full review text, nutrition — is retrieved on demand with
+ * `get_snapshot` and the module read tools, never stuffed into every message.
  */
 export async function buildSystemPrompt(user: SessionUser, extra?: string) {
   const tz = user.timezone;
   const today = todayKey(tz);
   const now = new Date();
-  const [memory, tasksToday, overdue, eventsToday, goals, workout, finance] = await Promise.all([
+  const [memory, snapshot] = await Promise.all([
     listMemory(user.id, { limit: 60 }),
-    listTasks(user.id, { view: "today", tz, limit: 15 }),
-    listTasks(user.id, { view: "overdue", tz, limit: 10 }),
-    listEvents(user.id, { from: new Date(today + "T00:00:00"), to: new Date(today + "T23:59:59") }).catch(() => []),
-    listGoals(user.id, "active", tz),
-    workoutForDate(user.id, today).catch(() => null),
-    financialSummary(user.id, { from: today.slice(0, 7) + "-01", to: today }).catch(() => null),
+    lifeSnapshot(user, { sections: COMPACT_SECTIONS, horizonDays: CONTEXT_HORIZON_DAYS, tz }),
   ]);
   touchMemories(memory.map((m) => m.id)).catch(() => {});
-  const fmtTime = (d: Date) => d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: tz });
+  const snap = fitToBudget(renderCompact(snapshot), SNAPSHOT_BUDGET_CHARS);
   const lines = [
     `You are the AI core of "${process.env.APP_NAME ?? "Personal OS"}", the private Personal Operating System of ${user.name} (${user.email}).`,
     `Current date/time: ${now.toLocaleString("en-GB", { timeZone: tz })} (${tz}). Today is ${today}. Currency: ${user.currency}. The user writes in Spanish or English; answer in the language they use.`,
@@ -42,17 +40,16 @@ export async function buildSystemPrompt(user: SessionUser, extra?: string) {
     "- German: the course is the integrated 'Deutsch' module (28 units, book: Basic German – Schenke & Seago). Use german tools for progress.",
     "- Keep answers compact and useful; use short lists when summarizing.",
     "",
+    "CONTEXT",
+    `- The snapshot below is a summary, not the whole database: lists are clipped and it only looks ${CONTEXT_HORIZON_DAYS} days ahead. Never answer "you have nothing" from it alone.`,
+    "- Use get_snapshot(sections, horizon) to refresh or widen it (sections: tasks, calendar, goals, projects, training, studies, german, finance, nutrition, reviews), and the module read tools (get_tasks, get_calendar, get_goals, get_projects, ...) for full lists, other periods, history and ids.",
+    "",
     "LONG-TERM MEMORY (user-controlled; use remember_memory to add durable facts the user tells you):",
     ...(memory.length ? memory.map((m) => `- [${m.kind}${m.key ? ":" + m.key : ""}] ${m.content}`) : ["- (empty)"]),
     "",
-    "CURRENT STATE SNAPSHOT",
-    `- Tasks due today/overdue-included (${tasksToday.length}): ${tasksToday.map((t) => `${t.title}${t.dueDate && t.dueDate < today ? " (overdue)" : ""} [${t.priority}, id ${t.id.slice(0, 8)}]`).join("; ") || "none"}`,
-    overdue.length ? `- Overdue tasks: ${overdue.length}` : "",
-    `- Calendar today: ${eventsToday.map((e) => `${fmtTime(e.startAt)}–${fmtTime(e.endAt)} ${e.title} (${e.kind})`).join("; ") || "nothing scheduled"}`,
-    `- Active goals: ${goals.slice(0, 8).map((g) => `${g.name} ${g.progress}%${g.deadline ? " by " + g.deadline : ""}`).join("; ") || "none"}`,
-    workout ? `- Training today (cycle day ${workout.dayIndex + 1}/${workout.plan.cycleLength}): ${workout.day ? (workout.day.isRest ? "Rest day — " + (workout.day.notes ?? "") : workout.day.name + " · " + workout.day.exercises.length + " exercises") : "no plan day"}${workout.session ? (workout.session.finishedAt ? " (session finished)" : " (session in progress)") : ""}` : "- Training: no active plan",
-    finance ? `- Finance this month: income ${finance.income}, expenses ${finance.expenses}, net ${finance.net}, top categories ${finance.byCategory.slice(0, 3).map((c) => `${c.name} ${c.total}`).join(", ") || "none"}` : "",
-    `- German course units: ${UNITS.length}.`,
+    `CURRENT STATE SNAPSHOT (${today}, next ${CONTEXT_HORIZON_DAYS} days)`,
+    ...snap.lines,
+    `- German course units available: ${UNITS.length}.`,
     extra ? "\n" + extra : "",
   ];
   return lines.filter((l) => l !== "").join("\n");
