@@ -160,6 +160,18 @@ message per workout, expense or task — and everything is skipped when the user
 off. "Goal at risk" is deliberately *not* emitted here: it becomes true on a quiet day, not on an
 action, so it belongs to the daily generator (a later phase).
 
+### Nutrition: energy and macros must agree
+Calories and the three macros are four separate columns, so nothing structural stops them contradicting
+each other. `services/nutrition.ts` owns the arithmetic and every writer goes through it:
+`scaleFactor` turns the quantity into a multiplier (`basis` says whether the given numbers are the total,
+per 100 g or per serving, so the model never does the multiplication), `normalizeEntry` scales and then
+checks the energy against Atwater (protein×4 + carbs×4 + fat×9) with a tolerance of 25 kcal or 10%.
+An **estimate** that falls outside tolerance has its calories recomputed from the macros and the
+adjustment is returned to the caller, so the assistant reports what was stored rather than what it
+guessed. **User-declared and food-database values are never rewritten** — real labels deviate — but the
+discrepancy is reported on read. `totalsOf` is the single summation used by the day view, and the range
+summary reports the same check, so a day and a range can never tell different stories.
+
 ## AI layer (`src/server/ai`)
 - `registry.ts` — `defineTool({ name, module, risk, schema, run, needsConfirmation, summarize })`.
   Adding a tool is one call; `tools/index.ts` imports every tool file.
