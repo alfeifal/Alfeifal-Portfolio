@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { subscribePath } from "./invalidate";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public details?: unknown) { super(message); }
@@ -38,6 +39,11 @@ export function useApi<T = unknown>(path: string | null, deps: unknown[] = []) {
     }
   }, [path, ...deps]);
   useEffect(() => { load(); }, [load]);
+  // Refetch when something else (an AI action) changed this module's data server-side.
+  useEffect(() => {
+    if (!path) return;
+    return subscribePath(path, () => { load(true); });
+  }, [path, load]);
   const setData = useCallback((updater: T | ((prev: T | null) => T)) => setState((s) => ({ ...s, data: typeof updater === "function" ? (updater as (p: T | null) => T)(s.data) : updater })), []);
   return { ...state, refresh: () => load(true), reload: () => load(false), setData };
 }

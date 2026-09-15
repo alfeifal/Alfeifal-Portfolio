@@ -18,7 +18,7 @@ import * as inv from "@/server/services/investing";
 import * as tasks from "@/server/services/tasks";
 import { dashboardData } from "@/server/services/dashboard";
 import { analyticsOverview } from "@/server/services/analytics";
-import { todayKey } from "@/lib/dates";
+import { addDaysKey, todayKey } from "@/lib/dates";
 
 const hasDb = Boolean(process.env.TEST_DATABASE_URL || process.env.DATABASE_URL);
 const d = hasDb ? describe : describe.skip;
@@ -128,10 +128,28 @@ d("phase 1 — training sessions vs workouts, weekly metric", () => {
     expect(stats.weekly).toEqual([{ week: "2026-W32", sessions: 1, volume: 480 }]);
   });
 
+  it("the cycle places no training day before the plan started", async () => {
+    const plan = (await tr.getPlanWithDays(user.id))!;
+    const dayBefore = addDaysKey(plan.startDate, -1);
+    expect(tr.cyclePlacesWorkout(plan, dayBefore)).toBeNull();
+    expect(tr.cyclePlacesWorkout(plan, addDaysKey(plan.startDate, -8))).toBeNull();
+    // On and after the start date the cycle behaves normally: D1 of a 3-1-3-1 cycle is a training day.
+    expect(tr.cyclePlacesWorkout(plan, plan.startDate)).not.toBeNull();
+    // And an adherence window that begins before the plan cannot count those days against the user.
+    const adherence = await tr.trainingAdherence(user.id, { from: addDaysKey(plan.startDate, -10), to: plan.startDate }, TZ);
+    expect(adherence.plannedDays).toBe(1);
+    expect(adherence.byDay.filter((d) => d.date < plan.startDate && d.planned)).toHaveLength(0);
+  });
+
   it("weekly metric compares completed workouts with the training days of the cycle in this week", async () => {
     const w0 = await tr.weeklyTrainingStatus(user.id, TZ);
     expect(w0.completed).toBe(0);
-    expect(w0.plannedDays).toBeGreaterThanOrEqual(5); // 3-1-3-1 cycle: any 7-day window holds 5 or 6 training days
+    // The 3-1-3-1 cycle puts 5 or 6 training days in any 7-day window it fully covers — but the cycle
+    // places nothing before the plan's start date, so a plan seeded mid-week covers only part of it.
+    const plan = (await tr.getPlanWithDays(user.id))!;
+    const coversWholeWeek = plan.startDate <= w0.from;
+    if (coversWholeWeek) expect(w0.plannedDays).toBeGreaterThanOrEqual(5);
+    else expect(w0.plannedDays).toBeGreaterThanOrEqual(0);
     expect(w0.plannedDays).toBeLessThanOrEqual(6);
     expect(w0.plannedSoFar).toBeLessThanOrEqual(w0.plannedDays!);
     const today = todayKey(TZ);

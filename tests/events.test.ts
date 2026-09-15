@@ -192,21 +192,26 @@ d("phase 2 — event bus and linked goals", () => {
     try {
       const g = await goals.createGoal(fresh.id, linkedGoal({ name: "Two workouts", category: "training", metricSource: "training", metricKind: "completed_workouts", metricTarget: 2 }), TZ);
       const goalNotifications = () => db.select().from(notifications).where(and(eq(notifications.userId, fresh.id), eq(notifications.kind, "goal")));
+      /**
+       * Only the "reached" transition. The subscriber also reports at-risk → on-track, which is a
+       * different (and correct) message: whether it fires depends on how far into the week today is,
+       * so counting every goal notification would make this test pass or fail by weekday.
+       */
+      const reached = async () => (await goalNotifications()).filter((n) => n.title.startsWith("Goal reached"));
       // Two distinct days inside the current ISO week, so the week metric counts both wherever today falls.
       const monday = dateKey(weekRange(new Date(today() + "T12:00:00")).start);
       const s1 = await tr.logSet(fresh.id, tr.setSchema.parse({ exercise: "bench", weightKg: 50, reps: 5, date: monday }));
       await tr.updateSession(fresh.id, s1.session.id, { finished: true });
       expect((await goals.getGoal(fresh.id, g.id, TZ)).metricCurrent).toBe(1);
-      expect(await goalNotifications()).toHaveLength(0); // halfway is not news
+      expect(await reached()).toHaveLength(0); // halfway is not news
       const s2 = await tr.logSet(fresh.id, tr.setSchema.parse({ exercise: "sentadilla", weightKg: 70, reps: 5, date: addDaysKey(monday, 1) }));
       await tr.updateSession(fresh.id, s2.session.id, { finished: true });
       expect(await goals.getGoal(fresh.id, g.id, TZ)).toMatchObject({ metricCurrent: 2, progress: 100 });
-      const notes = await goalNotifications();
+      const notes = await reached();
       expect(notes).toHaveLength(1);
-      expect(notes[0].title).toContain("Goal reached");
       // Replaying the event does not notify again (dedupeKey per goal and period).
       await emitDomainEvent(fresh.id, { type: "workout.finished", sessionId: s2.session.id, date: addDaysKey(monday, 1), sets: 1 }, { tz: TZ });
-      expect(await goalNotifications()).toHaveLength(1);
+      expect(await reached()).toHaveLength(1);
       // A weekly goal does not auto-complete: it resets when the week does.
       expect((await goals.getGoal(fresh.id, g.id, TZ)).status).toBe("active");
     } finally { await deleteTestUser(fresh.id); }

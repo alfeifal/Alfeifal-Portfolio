@@ -13,9 +13,29 @@ export type ChatStreamEvent =
   | { type: "tool"; name: string }
   | { type: "action"; action: ExecutedAction }
   | { type: "pending"; action: ExecutedAction }
-  | { type: "done"; conversationId: string; messageId: string; usage: { input: number; output: number } }
+  | { type: "done"; conversationId: string; messageId: string; outcome: TurnOutcome; usage: { input: number; output: number } }
   /** `partial` means text already reached the client: it must be kept and marked as interrupted. */
   | { type: "error"; message: string; partial: boolean };
+
+/**
+ * How a turn actually ended, decided from the executed actions alone — never from the model's prose.
+ *
+ * `partial` exists because a single sentence can produce several independent actions: if one of them
+ * failed, the turn is not a success, and the UI must not present it as one.
+ */
+export type TurnOutcome = "none" | "ok" | "partial" | "failed" | "pending";
+
+export function turnOutcome(
+  actions: readonly { status: string }[],
+  pending: readonly { status: string }[] = [],
+): TurnOutcome {
+  const done = actions.filter((a) => a.status === "success" || a.status === "confirmed");
+  const failed = actions.filter((a) => a.status === "failed");
+  if (failed.length) return done.length ? "partial" : "failed";
+  if (pending.length) return "pending";
+  if (done.length) return "ok";
+  return "none";
+}
 
 export function encodeEvent(e: ChatStreamEvent) {
   return JSON.stringify(e) + "\n";

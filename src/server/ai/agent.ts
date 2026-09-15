@@ -7,21 +7,48 @@ import { AI_MODEL, anthropic } from "./client";
 import { allTools, getTool, type ToolDefinition } from "./registry";
 import { toInputSchema } from "./schema-json";
 import { buildSystemPrompt } from "./context";
+import type { SnapshotSection } from "@/server/services/snapshot";
 import { audit } from "@/server/audit";
 import { getPreferences } from "@/server/services/users";
 import { conversationExpiry, touchConversation } from "@/server/services/conversations";
-import { encodeEvent, type ChatStreamEvent } from "./stream";
+import { encodeEvent, turnOutcome, type ChatStreamEvent, type TurnOutcome } from "./stream";
 import "./tools"; // registers every tool
 
 const MAX_TOOL_ROUNDS = 8;
 const PENDING_TTL_MS = 30 * 60 * 1000;
 
-export interface ExecutedAction { logId: string; tool: string; risk: string; status: string; summary: string | null; params: unknown; result?: unknown; error?: string | null }
-export interface ChatResult { conversationId: string; messageId: string; text: string; actions: ExecutedAction[]; pending: ExecutedAction[]; usage: { input: number; output: number } }
+/** `module` is the tool's registry module: the client uses it to refetch exactly the data this action changed. */
+export interface ExecutedAction { logId: string; tool: string; module: string; risk: string; status: string; summary: string | null; params: unknown; result?: unknown; error?: string | null }
+export interface Usage { input: number; output: number; cacheRead: number; cacheWrite: number }
+export interface ChatResult { conversationId: string; messageId: string; text: string; actions: ExecutedAction[]; pending: ExecutedAction[]; outcome: TurnOutcome; usage: Usage }
 
+/**
+ * The tool block is ~92 kB of JSON for 134 tools and is identical on every request, so it is built
+ * once per process instead of being re-serialised (and re-converted from Zod) on each message.
+ */
+let toolCache: Anthropic.Tool[] | null = null;
 function anthropicTools(): Anthropic.Tool[] {
-  return allTools().map((t) => ({ name: t.name, description: `[${t.module} · ${t.risk}] ${t.description}`, input_schema: toInputSchema(t.schema) as Anthropic.Tool.InputSchema }));
+  toolCache ??= allTools().map((t) => ({ name: t.name, description: `[${t.module} · ${t.risk}] ${t.description}`, input_schema: toInputSchema(t.schema) as Anthropic.Tool.InputSchema }));
+  return toolCache;
 }
+
+/**
+ * Marks the end of the tool block as a prompt-cache breakpoint.
+ *
+ * Those ~25k tokens are the same for every user and every message, and they dominate both the time to
+ * first token and the cost of a turn. Caching them keeps all 134 tools available to the model — no
+ * routing, no capability lost — while only the system prompt and the transcript, which genuinely
+ * change, are processed fresh.
+ */
+function withCacheBreakpoint(tools: Anthropic.Tool[]): Anthropic.Tool[] {
+  if (!tools.length) return tools;
+  const out = tools.slice();
+  out[out.length - 1] = { ...out[out.length - 1], cache_control: { type: "ephemeral" } };
+  return out;
+}
+
+/** Test seam: the memoised tool block must not outlive a registry that changed. */
+export function __resetToolCache() { toolCache = null; }
 
 /** Continues the given conversation only while it is alive; an expired transcript starts a fresh one (never resurrected). */
 async function ensureConversation(user: SessionUser, conversationId: string | null, kind: string, firstUserText: string) {
@@ -59,7 +86,7 @@ export async function runTool(tool: ToolDefinition, rawInput: unknown, ctx: { us
   const parsed = tool.schema.safeParse(rawInput);
   if (!parsed.success) {
     const [log] = await db.insert(aiActionLogs).values({ userId: ctx.user.id, conversationId: ctx.conversationId, messageId: ctx.messageId ?? null, tool: tool.name, risk: tool.risk, params: rawInput, status: "failed", error: "Invalid parameters: " + parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), durationMs: Date.now() - started }).returning();
-    return { logId: log.id, tool: tool.name, risk: tool.risk, status: "failed", summary: null, params: rawInput, error: log.error };
+    return { logId: log.id, tool: tool.name, module: tool.module, risk: tool.risk, status: "failed", summary: null, params: rawInput, error: log.error };
   }
   const input = parsed.data;
   const prefs = await getPreferences(ctx.user.id);
@@ -68,18 +95,18 @@ export async function runTool(tool: ToolDefinition, rawInput: unknown, ctx: { us
   if (!needs && tool.risk === "medium") needs = confirmMedium || (tool.needsConfirmation?.(input, { ...ctx }) ?? false);
   if (needs && !ctx.confirmed) {
     const [log] = await db.insert(aiActionLogs).values({ userId: ctx.user.id, conversationId: ctx.conversationId, messageId: ctx.messageId ?? null, tool: tool.name, risk: tool.risk, params: input, status: "pending_confirmation", summary: typeof needs === "string" ? needs : tool.summarize?.(input, null) ?? tool.name, expiresAt: new Date(Date.now() + PENDING_TTL_MS) }).returning();
-    return { logId: log.id, tool: tool.name, risk: tool.risk, status: "pending_confirmation", summary: log.summary, params: input };
+    return { logId: log.id, tool: tool.name, module: tool.module, risk: tool.risk, status: "pending_confirmation", summary: log.summary, params: input };
   }
   try {
     const result = await tool.run(input, { user: ctx.user, conversationId: ctx.conversationId, confirmed: ctx.confirmed });
     const summary = tool.summarize?.(input, result) ?? tool.name;
     const [log] = await db.insert(aiActionLogs).values({ userId: ctx.user.id, conversationId: ctx.conversationId, messageId: ctx.messageId ?? null, tool: tool.name, risk: tool.risk, params: input, result: truncate(result), status: ctx.confirmed ? "confirmed" : "success", summary, confirmedAt: ctx.confirmed ? new Date() : null, durationMs: Date.now() - started }).returning();
     if (tool.risk !== "read") await audit({ userId: ctx.user.id, actor: "ai", action: `ai.${tool.name}`, metadata: { logId: log.id, summary } });
-    return { logId: log.id, tool: tool.name, risk: tool.risk, status: log.status, summary, params: input, result };
+    return { logId: log.id, tool: tool.name, module: tool.module, risk: tool.risk, status: log.status, summary, params: input, result };
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     const [log] = await db.insert(aiActionLogs).values({ userId: ctx.user.id, conversationId: ctx.conversationId, messageId: ctx.messageId ?? null, tool: tool.name, risk: tool.risk, params: input, status: "failed", error, durationMs: Date.now() - started }).returning();
-    return { logId: log.id, tool: tool.name, risk: tool.risk, status: "failed", summary: null, params: input, error };
+    return { logId: log.id, tool: tool.name, module: tool.module, risk: tool.risk, status: "failed", summary: null, params: input, error };
   }
 }
 
@@ -103,17 +130,17 @@ const noEmit: Emit = () => {};
  * as it is produced when streaming, and does nothing otherwise. Messages are persisted once per round,
  * never per chunk.
  */
-async function runChat(user: SessionUser, opts: { conversationId?: string | null; text: string; kind?: string; systemExtra?: string; maxRounds?: number; allowedTools?: string[]; stream?: boolean; client?: Pick<ReturnType<typeof anthropic>, "messages"> }, emit: Emit = noEmit): Promise<ChatResult> {
+async function runChat(user: SessionUser, opts: { conversationId?: string | null; text: string; kind?: string; systemExtra?: string; maxRounds?: number; allowedTools?: string[]; snapshotSections?: readonly SnapshotSection[]; stream?: boolean; client?: Pick<ReturnType<typeof anthropic>, "messages"> }, emit: Emit = noEmit): Promise<ChatResult> {
   const client = opts.client ?? anthropic();
   const conv = await ensureConversation(user, opts.conversationId ?? null, opts.kind ?? "assistant", opts.text);
   emit({ type: "start", conversationId: conv.id });
   const [userMsg] = await db.insert(messages).values({ conversationId: conv.id, role: "user", text: opts.text, content: [{ type: "text", text: opts.text }] }).returning();
-  const system = await buildSystemPrompt(user, opts.systemExtra);
-  const tools = anthropicTools().filter((t) => !opts.allowedTools || opts.allowedTools.includes(t.name));
+  const system = await buildSystemPrompt(user, opts.systemExtra, opts.snapshotSections);
+  const tools = withCacheBreakpoint(opts.allowedTools ? anthropicTools().filter((t) => opts.allowedTools!.includes(t.name)) : anthropicTools());
   const transcript = await history(conv.id);
   const actions: ExecutedAction[] = [];
   const pending: ExecutedAction[] = [];
-  let usage = { input: 0, output: 0 };
+  let usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   let finalText = "";
   let lastAssistantId = userMsg.id;
 
@@ -127,7 +154,12 @@ async function runChat(user: SessionUser, opts: { conversationId?: string | null
     } else {
       res = await client.messages.create(params);
     }
-    usage = { input: usage.input + res.usage.input_tokens, output: usage.output + res.usage.output_tokens };
+    usage = {
+      input: usage.input + res.usage.input_tokens,
+      output: usage.output + res.usage.output_tokens,
+      cacheRead: usage.cacheRead + (res.usage.cache_read_input_tokens ?? 0),
+      cacheWrite: usage.cacheWrite + (res.usage.cache_creation_input_tokens ?? 0),
+    };
     const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("\n").trim();
     const [assistantMsg] = await db.insert(messages).values({ conversationId: conv.id, role: "assistant", text, content: res.content, inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens }).returning();
     lastAssistantId = assistantMsg.id;
@@ -159,10 +191,10 @@ async function runChat(user: SessionUser, opts: { conversationId?: string | null
     transcript.push({ role: "user", content: results });
   }
   await touchConversation(conv.id); // every exchange slides the 24 h retention window forward
-  return { conversationId: conv.id, messageId: lastAssistantId, text: finalText, actions, pending, usage };
+  return { conversationId: conv.id, messageId: lastAssistantId, text: finalText, actions, pending, outcome: turnOutcome(actions, pending), usage };
 }
 
-export function chat(user: SessionUser, opts: { conversationId?: string | null; text: string; kind?: string; systemExtra?: string; maxRounds?: number; allowedTools?: string[] }): Promise<ChatResult> {
+export function chat(user: SessionUser, opts: { conversationId?: string | null; text: string; kind?: string; systemExtra?: string; maxRounds?: number; allowedTools?: string[]; snapshotSections?: readonly SnapshotSection[] }): Promise<ChatResult> {
   return runChat(user, opts);
 }
 
@@ -171,7 +203,7 @@ export function chat(user: SessionUser, opts: { conversationId?: string | null; 
  * as it is generated, tool activity is announced by name only, and the turn ends with a `done` event
  * (or an `error` one that says whether any text had already been delivered).
  */
-export function chatStream(user: SessionUser, opts: { conversationId?: string | null; text: string; kind?: string; signal?: AbortSignal; client?: Pick<ReturnType<typeof anthropic>, "messages"> }) {
+export function chatStream(user: SessionUser, opts: { conversationId?: string | null; text: string; kind?: string; systemExtra?: string; maxRounds?: number; snapshotSections?: readonly SnapshotSection[]; signal?: AbortSignal; client?: Pick<ReturnType<typeof anthropic>, "messages"> }) {
   const encoder = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -182,7 +214,7 @@ export function chatStream(user: SessionUser, opts: { conversationId?: string | 
       };
       try {
         const r = await runChat(user, { ...opts, stream: true }, send);
-        send({ type: "done", conversationId: r.conversationId, messageId: r.messageId, usage: r.usage });
+        send({ type: "done", conversationId: r.conversationId, messageId: r.messageId, outcome: r.outcome, usage: r.usage });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         console.error("[ai] stream failed", e);

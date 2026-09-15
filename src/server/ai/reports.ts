@@ -110,9 +110,21 @@ export async function plan(user: SessionUser, opts: { horizon: "today" | "week";
   return chat(user, { conversationId: opts.conversationId ?? null, kind: "planner", text: opts.instructions?.trim() ? opts.instructions : opts.horizon === "today" ? "What should I do today? Build my plan." : "Organize my week.", systemExtra: extra, maxRounds: 12, allowedTools: PLANNER_TOOLS });
 }
 
-/** Quick entry (spec §30): one sentence → the right record(s). */
+/**
+ * Quick entry (spec §30): one sentence → the right record(s).
+ *
+ * The mode is defined once and shared by the plain endpoint and the streaming one, so Fast Log behaves
+ * identically whether the client streams or not. `maxRounds` is 4: one round to call the tool, one to
+ * confirm the result, and headroom for a second record or a correction.
+ */
+export const QUICK_ENTRY = {
+  kind: "quick_entry",
+  maxRounds: 4,
+  systemExtra: "QUICK ENTRY MODE: the user typed a single quick note. Decide which record(s) to create (expense, income, task, event, workout set, study session, meal, journal entry, goal progress...) and create them immediately with tools — do not call read tools to browse around first unless a required field is genuinely missing. Reply in one or two short lines confirming exactly what was saved (or that it failed / needs confirmation).",
+} as const;
+
 export async function quickEntry(user: SessionUser, text: string) {
-  return chat(user, { kind: "quick_entry", text, systemExtra: "QUICK ENTRY MODE: the user typed a single quick note. Decide which record(s) to create (expense, income, task, event, workout set, study session, meal, journal entry, goal progress...) and create them immediately with tools. Reply in one or two short lines confirming exactly what was saved (or that it failed / needs confirmation).", maxRounds: 4 });
+  return chat(user, { kind: "quick_entry", text, systemExtra: QUICK_ENTRY.systemExtra, maxRounds: 4 });
 }
 
 /** Explain a news item (AI interpretation, stored separately from the verified headline). */

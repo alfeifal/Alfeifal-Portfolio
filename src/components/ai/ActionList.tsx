@@ -7,7 +7,8 @@ import { Badge, Button } from "@/components/ui";
 import { T, V } from "@/components/motion";
 import { cn } from "@/lib/utils";
 
-export interface Action { logId: string; tool: string; risk: string; status: string; summary: string | null; params?: unknown; result?: unknown; error?: string | null }
+/** `module` names the tool's domain, so a confirmed action can refetch exactly the pages it changed. */
+export interface Action { logId: string; tool: string; module?: string; risk: string; status: string; summary: string | null; params?: unknown; result?: unknown; error?: string | null }
 
 const label = (tool: string) => tool.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 

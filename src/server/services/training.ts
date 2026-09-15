@@ -74,6 +74,20 @@ export function cycleDayIndex(plan: { startDate: string; cycleLength: number }, 
   return ((diff % plan.cycleLength) + plan.cycleLength) % plan.cycleLength;
 }
 
+/**
+ * Whether the cycle actually placed a training day on this date.
+ *
+ * `cycleDayIndex` wraps negative differences, so a date *before* the plan started still maps onto a
+ * cycle day. For a lookup that is harmless, but for adherence it is not: a plan created today would
+ * otherwise be credited with training days earlier in the same week and the user would be told they
+ * are already behind on a plan they have not started. The cycle places nothing before its start date.
+ */
+export function cyclePlacesWorkout(plan: { startDate: string; cycleLength: number; days: { dayIndex: number; isRest: boolean; name?: string | null }[] }, date: string) {
+  if (date < plan.startDate) return null;
+  const day = plan.days.find((x) => x.dayIndex === cycleDayIndex(plan, date));
+  return day && !day.isRest ? day : null;
+}
+
 export async function workoutForDate(userId: string, date: string) {
   const plan = await getPlanWithDays(userId);
   if (!plan) return null;
@@ -327,8 +341,8 @@ export async function trainingAdherence(userId: string, range: { from: string; t
   const byDay: { date: string; planned: boolean; dayName: string | null; trained: boolean }[] = [];
   let plannedDays = 0, plannedSoFar = 0, missed = 0, extra = 0, hitSoFar = 0;
   for (let d = range.from; d <= range.to; d = addDaysKey(d, 1)) {
-    const day = plan.days.find((x) => x.dayIndex === cycleDayIndex(plan, d));
-    const planned = Boolean(day && !day.isRest);
+    const day = cyclePlacesWorkout(plan, d);
+    const planned = Boolean(day);
     const trained = trainedDays.has(d);
     if (planned) {
       plannedDays++;
@@ -362,8 +376,7 @@ export async function weeklyTrainingStatus(userId: string, tz?: string) {
   if (plan) {
     plannedDays = 0; plannedSoFar = 0;
     for (let d = from; d <= to; d = addDaysKey(d, 1)) {
-      const day = plan.days.find((x) => x.dayIndex === cycleDayIndex(plan, d));
-      if (day && !day.isRest) { plannedDays++; if (d <= today) plannedSoFar++; }
+      if (cyclePlacesWorkout(plan, d)) { plannedDays++; if (d <= today) plannedSoFar++; }
     }
   }
   return { from, to, completed: completedDays, sessions: workouts.length, emptySessions: sessions.length - workouts.length, plannedDays, plannedSoFar, source: "calculated" as const };

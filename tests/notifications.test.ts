@@ -23,6 +23,29 @@ const today = () => todayKey(TZ);
 const ofKind = async (userId: string, kind: "training" | "finance" | "study") =>
   db.select().from(notifications).where(and(eq(notifications.userId, userId), eq(notifications.kind, kind)));
 
+/**
+ * Several training conditions are independent and some depend on which weekday "today" is — the weekly
+ * "behind" notice, in particular, is legitimate whenever the cycle already placed two unmet days this
+ * week. A test about one condition therefore asserts on that condition only, instead of on the total,
+ * which would otherwise pass or fail depending on the day the suite happens to run.
+ */
+const matching = async (userId: string, kind: "training" | "finance" | "study", needle: string) =>
+  (await ofKind(userId, kind)).filter((n) => n.title.includes(needle));
+
+/** Logs a workout on every day this week the cycle already placed, so the week is genuinely up to date. */
+const catchUpThisWeek = async (userId: string) => {
+  const plan = await tr.getPlanWithDays(userId);
+  if (!plan) return;
+  const { weekRange, dateKey } = await import("@/lib/dates");
+  let d = dateKey(weekRange(new Date(today() + "T12:00:00")).start);
+  for (; d < today(); d = addDaysKey(d, 1)) {
+    if (!tr.cyclePlacesWorkout(plan, d)) continue;
+    // Finished, or the session itself becomes the "still open" condition we are trying to silence.
+    const { session } = await tr.logSet(userId, tr.setSchema.parse({ exercise: "bench", weightKg: 60, reps: 8, date: d }));
+    await tr.updateSession(userId, session.id, { finished: true, durationMinutes: 45 });
+  }
+};
+
 d("phase 3.4 — training, finance and study notifications", () => {
   const users: string[] = [];
   const newUser = async () => { const u = await createTestUser(); users.push(u.id); return u; };
@@ -54,7 +77,7 @@ d("phase 3.4 — training, finance and study notifications", () => {
     const user = await newUser();
     await alignCycle(user.id, 3); // D4 is a rest day in the 3-1-3-1 cycle
     await generateNotifications(user.id, TZ);
-    expect(await ofKind(user.id, "training")).toHaveLength(0);
+    expect(await matching(user.id, "training", "Training today")).toHaveLength(0);
   });
 
   it("training: an unfinished session from a past day is surfaced once", async () => {
@@ -62,16 +85,15 @@ d("phase 3.4 — training, finance and study notifications", () => {
     await alignCycle(user.id, 3); // rest day today, so only the open session can fire
     const session = await tr.startSession(user.id, { date: addDaysKey(today(), -2), source: "user" }, TZ);
     await generateNotifications(user.id, TZ);
-    const open = await ofKind(user.id, "training");
+    const open = await matching(user.id, "training", "still open");
     expect(open).toHaveLength(1);
-    expect(open[0].title).toContain("still open");
     expect(open[0].href).toBe(`/training/sessions/${session.id}`);
     await generateNotifications(user.id, TZ);
-    expect(await ofKind(user.id, "training")).toHaveLength(1);
+    expect(await matching(user.id, "training", "still open")).toHaveLength(1);
     // Finishing it stops any further notice for a new session.
     await tr.updateSession(user.id, session.id, { finished: true, durationMinutes: 30 });
     await generateNotifications(user.id, TZ);
-    expect(await ofKind(user.id, "training")).toHaveLength(1);
+    expect(await matching(user.id, "training", "still open")).toHaveLength(1);
   });
 
   it("training: falling two or more training days behind in the week is reported once per week", async () => {
@@ -160,8 +182,9 @@ d("phase 3.4 — training, finance and study notifications", () => {
     await st.logStudySession(user.id, st.studySessionSchema.parse({ subject: "alemán", durationMinutes: 5 }), TZ);
     await generateNotifications(user.id, TZ);
     const behind = (await ofKind(user.id, "study")).filter((n) => n.title.includes("behind the weekly goal"));
-    const { weekRange } = await import("@/lib/dates");
-    const elapsed = Math.round((new Date(today() + "T12:00:00").getTime() - weekRange(new Date(today() + "T12:00:00")).start.getTime()) / 86400e3) + 1;
+    const { weekRange, dateKey } = await import("@/lib/dates");
+    const weekFrom = dateKey(weekRange(new Date(today() + "T12:00:00")).start);
+    const elapsed = Math.min(7, Math.max(1, Math.round((new Date(today() + "T12:00:00").getTime() - new Date(weekFrom + "T12:00:00").getTime()) / 86400e3) + 1));
     if (elapsed >= 4) {
       expect(behind).toHaveLength(1);
       expect(behind[0].body).toContain(`of ${german.weeklyGoalMinutes} min`);
@@ -194,6 +217,7 @@ d("phase 3.4 — training, finance and study notifications", () => {
   it("nothing to report means nothing is invented", async () => {
     const user = await newUser();
     await alignCycle(user.id, 3); // rest day
+    await catchUpThisWeek(user.id); // and no training day of this week is outstanding either
     await st.logStudySession(user.id, st.studySessionSchema.parse({ subject: "alemán", durationMinutes: 200 }), TZ);
     const rows = await db.select().from(notifications).where(and(eq(notifications.userId, user.id), inArray(notifications.kind, ["training", "finance"])));
     await generateNotifications(user.id, TZ);

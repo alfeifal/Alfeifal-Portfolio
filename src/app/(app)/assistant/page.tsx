@@ -3,15 +3,17 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { AnimatePresence, m } from "motion/react";
-import { Sparkles, History, Plus, Wallet, CheckSquare, Dumbbell, GraduationCap, CalendarPlus, BookOpen } from "lucide-react";
+import { Sparkles, History, Plus, Wallet, CheckSquare, Dumbbell, GraduationCap, CalendarPlus, BookOpen, Loader2 } from "lucide-react";
 import { Markdown, Modal, Button } from "@/components/ui";
 import { T, V } from "@/components/motion";
 import { api, useApi } from "@/lib/client";
-import { createEventParser, type ChatStreamEvent } from "@/server/ai/stream";
+import type { TurnOutcome } from "@/server/ai/stream";
+import { streamChat } from "@/lib/ai-stream";
+import { invalidateModules, modulesOf } from "@/lib/invalidate";
 import { useShell } from "@/components/shell/Shell";
 import { ActionList, type Action } from "@/components/ai/ActionList";
 
-interface Msg { id: string; role: "user" | "assistant"; text: string; actions?: Action[]; pending?: Action[]; streaming?: boolean; interrupted?: boolean }
+interface Msg { id: string; role: "user" | "assistant"; text: string; actions?: Action[]; pending?: Action[]; streaming?: boolean; interrupted?: boolean; outcome?: TurnOutcome; tool?: string }
 interface Conversation { id: string; title: string; kind: string; updatedAt: string; expiresAt: string }
 interface Transcript { id: string; title: string; expiresAt: string; messages: { id: string; role: string; text: string }[] }
 
@@ -94,42 +96,28 @@ function Assistant() {
     setInput(""); setBusy(true); setError("");
     const patch = (fn: (m: Msg) => Msg) => { if (seq === sendSeq.current) setMsgs((mm) => mm.map((m) => (m.id === assistantId ? fn(m) : m))); };
     try {
-      const res = await fetch("/api/ai/chat/stream", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId, text }), signal: controller.signal });
-      if (!res.ok || !res.body) {
-        const detail = await res.text().catch(() => "");
-        let message = `Request failed (${res.status})`;
-        try { message = (JSON.parse(detail) as { error?: string }).error ?? message; } catch { /* not JSON */ }
-        throw new Error(message);
+      const r = await streamChat({ text, conversationId, signal: controller.signal }, {
+        onStart: (id) => { if (seq === sendSeq.current) { setConversationId(id); writePointer(id); } },
+        onText: (delta) => patch((m) => ({ ...m, text: m.text + delta, tool: undefined })),
+        // The tool's name reaches the UI before the work starts, so a slow round is never a frozen screen.
+        onTool: (name) => patch((m) => ({ ...m, tool: name })),
+        onAction: (a) => patch((m) => ({ ...m, actions: [...(m.actions ?? []), a], tool: undefined })),
+        onPending: (a) => patch((m) => ({ ...m, pending: [...(m.pending ?? []), a], tool: undefined })),
+      });
+      if (seq !== sendSeq.current) return;
+      if (r.error) {
+        const hadText = Boolean(msgsRef.current.find((m) => m.id === assistantId)?.text);
+        if (hadText) patch((m) => ({ ...m, streaming: false, interrupted: true, tool: undefined }));
+        else { setMsgs((mm) => mm.filter((m) => m.id !== assistantId)); setError(r.error); }
+      } else {
+        patch((m) => ({ ...m, streaming: false, interrupted: r.interrupted, outcome: r.outcome, tool: undefined }));
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      const parser = createEventParser();
-      let done = false;
-      while (!done) {
-        const { value, done: finished } = await reader.read();
-        if (finished) break;
-        for (const ev of parser.push(decoder.decode(value, { stream: true })) as ChatStreamEvent[]) {
-          if (seq !== sendSeq.current) return; // a newer message is in flight: drop this one silently
-          if (ev.type === "start") { setConversationId(ev.conversationId); writePointer(ev.conversationId); }
-          else if (ev.type === "text") patch((m) => ({ ...m, text: m.text + ev.delta }));
-          else if (ev.type === "action") patch((m) => ({ ...m, actions: [...(m.actions ?? []), ev.action] }));
-          else if (ev.type === "pending") patch((m) => ({ ...m, pending: [...(m.pending ?? []), ev.action] }));
-          else if (ev.type === "done") { patch((m) => ({ ...m, streaming: false })); done = true; }
-          else if (ev.type === "error") {
-            done = true;
-            if (ev.partial) patch((m) => ({ ...m, streaming: false, interrupted: true }));
-            else { setMsgs((mm) => mm.filter((m) => m.id !== assistantId)); setError(ev.message); }
-          }
-        }
-      }
-      // The server closed without a terminal event: keep whatever arrived and say it was cut short.
-      patch((m) => (m.streaming ? { ...m, streaming: false, interrupted: true } : m));
       convs.refresh();
     } catch (e) {
-      if ((e as Error).name === "AbortError") { patch((m) => ({ ...m, streaming: false, interrupted: true })); return; }
+      if ((e as Error).name === "AbortError") { patch((m) => ({ ...m, streaming: false, interrupted: true, tool: undefined })); return; }
       if (seq !== sendSeq.current) return;
       setMsgs((mm) => mm.filter((m) => m.id !== assistantId || m.text));
-      patch((m) => ({ ...m, streaming: false, interrupted: Boolean(m.text) }));
+      patch((m) => ({ ...m, streaming: false, interrupted: Boolean(m.text), tool: undefined }));
       if (!msgsRef.current.find((m) => m.id === assistantId)?.text) setError((e as Error).message);
     } finally {
       if (seq === sendSeq.current) setBusy(false);
@@ -168,8 +156,11 @@ function Assistant() {
               {mm.role === "user" ? mm.text : mm.text ? <Markdown text={mm.text} /> : mm.streaming ? (
                 <span className="flex items-center gap-2.5 text-sm muted"><span className="flex items-center gap-0.5"><span className="dot" /><span className="dot" /><span className="dot" /></span>{STATUS[status]}</span>
               ) : <p className="text-sm muted">Done — see the actions below.</p>}
+              {mm.tool && <p className="flex items-center gap-2 text-xs muted"><Loader2 size={13} className="animate-spin" />{mm.tool.replace(/_/g, " ")}…</p>}
               {mm.interrupted && <p className="text-xs text-warning">The answer was interrupted — what you see above is what arrived.</p>}
-              {mm.role === "assistant" && <ActionList actions={mm.actions ?? []} pending={mm.pending ?? []} />}
+              {mm.role === "assistant" && <ActionList actions={mm.actions ?? []} pending={mm.pending ?? []} onChanged={(a) => invalidateModules(modulesOf([a]))} />}
+              {mm.outcome === "partial" && <p className="text-xs text-negative">Some of those actions failed — only the ones marked with a check were saved.</p>}
+              {mm.outcome === "failed" && <p className="text-xs text-negative">Nothing was saved: every action in this turn failed.</p>}
             </m.div>
           ))}
         </AnimatePresence>

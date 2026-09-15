@@ -22,7 +22,7 @@ describe("chat stream transport", () => {
       { type: "start", conversationId: "c1" },
       { type: "text", delta: "Hoy" },
       { type: "text", delta: " tienes" },
-      { type: "done", conversationId: "c1", messageId: "m1", usage: { input: 10, output: 5 } },
+      { type: "done", conversationId: "c1", messageId: "m1", outcome: "ok", usage: { input: 10, output: 5 } },
     ];
     const wire = events.map(encodeEvent).join("");
     expect(wire.endsWith("\n")).toBe(true);
