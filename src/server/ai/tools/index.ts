@@ -17,3 +17,4 @@ import "./planner";
 import "./notifications";
 import "./academy";
 import "./settings";
+import "./analytics";

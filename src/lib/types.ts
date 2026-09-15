@@ -21,3 +21,48 @@ export interface DashboardData {
   studies: { totalMinutes: number; bySubject: { name: string; minutes: number; weeklyGoalMinutes: number | null }[]; exams: { title: string; date: string }[]; german: { streak: number; xp: number; unitsPassed: number } | null } | null;
   nutrition: { totals: { calories: number; protein: number }; goals: { calories: number; protein: number }; meals: number; estimatedItems: number } | null;
 }
+
+/** Analytics payload (see services/analytics.ts). Rates are null when their denominator is zero. */
+export type Period = "week" | "month" | "quarter" | "year";
+export type Section = "overview" | "training" | "nutrition" | "finance" | "studies" | "productivity" | "goals";
+interface Consistency { macroCalories: number; delta: number; tolerance: number; ok: boolean }
+interface Macros { calories: number; protein: number; carbs: number; fat: number }
+export interface Analytics {
+  period: string; range: { from: string; to: string }; previousRange: { from: string; to: string }; rangeDays: number;
+  finance: {
+    current: { income: number; expenses: number; net: number; savingsRate: number | null; byCategory: { name: string; total: number }[] };
+    previous: { income: number; expenses: number; net: number };
+    change: { income: number | null; expenses: number | null; net: number | null };
+    monthly: { month: string; income: number; expenses: number }[]; financeBalance: number;
+    budgets: { id: string; name: string; amount: number; spent: number; remaining: number; pct: number }[];
+  };
+  training: {
+    current: { sessions: number; emptySessions: number; sets: number; volume: number; minutes: number; weekly: { week: string; sessions: number; volume: number }[] };
+    previous: { sessions: number; volume: number; sets: number; minutes: number };
+    change: { sessions: number | null; volume: number | null };
+    adherence: { plannedDays: number | null; plannedSoFar: number | null; completedDays: number; missedDays: number | null; extraDays: number | null; adherencePct: number | null };
+    perWeek: number | null;
+  };
+  studies: {
+    current: { totalMinutes: number; bySubject: { name: string; minutes: number; days: number; weeklyGoalMinutes: number | null }[]; daily: { date: string; minutes: number }[] };
+    previous: { totalMinutes: number }; change: { minutes: number | null };
+    consistency: { daysStudied: number; daysInRange: number; pct: number | null; avgMinutesPerStudyDay: number | null };
+    exams: { total: number; upcoming: number; inRange: number; withResult: number };
+    assignments: { total: number; open: number; overdue: number; completedInRange: number };
+  };
+  german: { totalMinutes: number; xp: number; streak: number; unitsPassed: number };
+  trading: Record<"real" | "paper", { trades: number; winRate: number; totalPnl: number }>;
+  nutrition: {
+    average: Macros; daysLogged: number; daily: (Macros & { date: string; consistency: Consistency })[];
+    previous: { average: Macros; daysLogged: number }; change: { calories: number | null; protein: number | null };
+    coverage: { daysLogged: number; daysInRange: number; pct: number | null };
+    compliance: Record<"calories" | "protein" | "carbs" | "fat", { target: number; daysOnTarget: number | null; pct: number | null }>;
+    consistency: Consistency;
+  };
+  productivity: { done: number; created: number; open: number; overdue: number; completionRate: number | null; perDay: number | null; daily: { date: string; n: number }[]; byWeekday: { day: string; n: number }[] };
+  calendar: { byKind: { kind: string; events: number; hours: number }[]; totalHours: number; events: number };
+  journal: { entries: number; daysWithEntry: number; daysInRange: number; withMood: number; avgMood: number | null };
+  investing: { snapshots: { date: string; totalValue: number; cash: number }[]; first: { date: string; totalValue: number } | null; last: { date: string; totalValue: number } | null; changePct: number | null };
+  goals: { active: number; completed: number; avgProgress: number; completedInRange: number; linked: number; pastDeadline: number; milestones: { total: number; completed: number; completedInRange: number } };
+  projects: { active: number; completed: number; total: number; avgProgress: number; milestones: { total: number } };
+}

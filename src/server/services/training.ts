@@ -314,6 +314,38 @@ export async function workoutHistory(userId: string, opts: { limit?: number; fro
 }
 
 /**
+ * Adherence over any range: how many of the training days the 8-day cycle places in that window were
+ * actually trained (a session with at least one working set). Without an active plan there is no target
+ * to measure against, so plannedDays is null rather than an invented number.
+ */
+export async function trainingAdherence(userId: string, range: { from: string; to: string }, tz?: string) {
+  const today = todayKey(tz);
+  const [plan, sessions] = await Promise.all([getPlanWithDays(userId), workoutHistory(userId, { from: range.from, to: range.to, limit: 500 })]);
+  const workouts = sessions.filter((s) => s.isWorkout);
+  const trainedDays = new Set(workouts.map((s) => s.date));
+  if (!plan) return { range, plannedDays: null, plannedSoFar: null, completedDays: trainedDays.size, workouts: workouts.length, emptySessions: sessions.length - workouts.length, missedDays: null, extraDays: null, adherencePct: null, byDay: [], source: "calculated" as const };
+  const byDay: { date: string; planned: boolean; dayName: string | null; trained: boolean }[] = [];
+  let plannedDays = 0, plannedSoFar = 0, missed = 0, extra = 0, hitSoFar = 0;
+  for (let d = range.from; d <= range.to; d = addDaysKey(d, 1)) {
+    const day = plan.days.find((x) => x.dayIndex === cycleDayIndex(plan, d));
+    const planned = Boolean(day && !day.isRest);
+    const trained = trainedDays.has(d);
+    if (planned) {
+      plannedDays++;
+      if (d <= today) { plannedSoFar++; if (trained) hitSoFar++; else missed++; }
+    } else if (trained) extra++;
+    byDay.push({ date: d, planned, dayName: day?.name ?? null, trained });
+  }
+  return {
+    range, plannedDays, plannedSoFar, completedDays: trainedDays.size, workouts: workouts.length,
+    emptySessions: sessions.length - workouts.length, missedDays: missed, extraDays: extra,
+    // Only days that have already happened can be judged; a week that has not finished is not a failure.
+    adherencePct: plannedSoFar > 0 ? Math.round((hitSoFar / plannedSoFar) * 100) : null,
+    byDay, source: "calculated" as const,
+  };
+}
+
+/**
  * Current ISO week (Mon–Sun, user's timezone): workouts done (distinct days with working sets) vs the
  * training days the active plan's cycle places in this week. No plan → plannedDays null (no invented target).
  */
