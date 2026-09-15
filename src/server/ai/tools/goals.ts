@@ -31,3 +31,12 @@ defineTool({
     return { deleted: i.id, name: goal.name, milestones: goal.milestones.length };
   },
 });
+
+defineTool({
+  name: "delete_milestone", module: "goals", risk: "medium",
+  description: "Delete a goal milestone. Requires confirmation. Use complete_milestone with done=false to simply untick it.",
+  schema: z.object({ id: z.string().uuid() }),
+  needsConfirmation: (i) => `Delete milestone ${i.id.slice(0, 8)}`,
+  summarize: (i) => `delete_milestone — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { await g.deleteMilestone(ctx.user.id, i.id); return { deleted: i.id }; },
+});

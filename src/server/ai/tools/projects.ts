@@ -22,3 +22,11 @@ defineTool({
     return { deleted: i.id, name: project.name, openTasks: project.openTasks };
   },
 });
+
+defineTool({
+  name: "add_project_milestone", module: "projects", risk: "low",
+  description: "Add a milestone to a project (the project equivalent of add_milestone for goals). Tick it with complete_milestone.",
+  schema: z.object({ projectId: z.string().uuid(), title: z.string().min(1).max(200), dueDate: dateSchema.optional(), position: z.number().int().min(0).default(0) }),
+  summarize: (i) => `add_project_milestone — ${i.title}`,
+  run: ({ projectId, ...rest }, ctx) => p.addProjectMilestone(ctx.user.id, projectId, rest),
+});

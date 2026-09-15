@@ -19,3 +19,11 @@ defineTool({
     return { marked: i.all ? "all" : i.ids!.length, unread: await notif.unreadCount(ctx.user.id) };
   },
 });
+
+defineTool({
+  name: "delete_notification", module: "notifications", risk: "low",
+  description: "Remove a notification from the list. Use mark_notifications_read when the user only wants it out of the unread count.",
+  schema: z.object({ id: z.string().uuid() }),
+  summarize: (i) => `delete_notification — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { await notif.deleteNotification(ctx.user.id, i.id); return { deleted: i.id }; },
+});

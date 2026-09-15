@@ -203,6 +203,12 @@ targets, a subject's weekly goal, shifting the training cycle, deleting one entr
 destructive tools take the record's **name** as well as its id: the confirmation card can then say
 exactly what disappears, and a name that does not match the id refuses to delete anything.
 
+The rule is now closed across the app: every create, update, delete, completion and preference the web
+UI offers has a tool, in journal, finance, investing, trading, studies, academy, notifications,
+training, goals, projects, nutrition, tasks, calendar, memory and the profile. Removals are
+confirmation-gated except three that cost nothing to redo (a price alert, a watchlist symbol, a
+notification), which stay `low`.
+
 Documented exceptions, where an AI action would be wrong rather than missing: accepting or rejecting a
 plan (the user's decision by design, phase 3.2b), the German module's own progress state (the module
 owns it), account security (password, sessions, account deletion), and conversation deletion.

@@ -40,8 +40,13 @@ describe("tool surface", () => {
   it("every write tool is classified and destructive ones are high risk", () => {
     const risky = allTools().filter((t) => t.risk !== "read");
     expect(risky.length).toBeGreaterThan(30);
-    for (const t of allTools().filter((t) => t.name.startsWith("delete_"))) {
-      expect({ tool: t.name, gated: t.risk === "high" || Boolean(t.needsConfirmation) }).toEqual({ tool: t.name, gated: true });
+    // Every removal is confirmation-gated except a short, explicit list of trivially reversible ones:
+    // re-adding a price alert, a watchlist symbol or a notification costs the user nothing.
+    const REVERSIBLE = new Set(["delete_price_alert", "delete_notification", "remove_watchlist_item"]);
+    for (const t of allTools().filter((t) => t.name.startsWith("delete_") || t.name.startsWith("remove_"))) {
+      const gated = t.risk === "high" || Boolean(t.needsConfirmation) || REVERSIBLE.has(t.name);
+      expect({ tool: t.name, gated }).toEqual({ tool: t.name, gated: true });
+      if (REVERSIBLE.has(t.name)) expect(t.risk).toBe("low");
     }
     expect(getTool("delete_goal")!.risk).toBe("high");
     expect(getTool("delete_project")!.risk).toBe("high");

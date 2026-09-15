@@ -86,3 +86,12 @@ defineTool({
   summarize: (i) => `delete_workout_set — ${i.id.slice(0, 8)}`,
   run: async (i, ctx) => { await tr.deleteSet(ctx.user.id, i.id); return { deleted: i.id }; },
 });
+
+defineTool({
+  name: "delete_workout_session", module: "training", risk: "medium",
+  description: "Delete a whole workout session and its sets. Requires confirmation. Volume, records and training stats are recomputed from what is left. Use delete_workout_set for a single mistyped set.",
+  schema: z.object({ id: z.string().uuid() }),
+  needsConfirmation: (i) => `Delete the workout session ${i.id.slice(0, 8)} and all of its sets`,
+  summarize: (i) => `delete_workout_session — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { const s = await tr.getSession(ctx.user.id, i.id); await tr.deleteSession(ctx.user.id, i.id); return { deleted: i.id, date: s.date, sets: s.sets.length }; },
+});

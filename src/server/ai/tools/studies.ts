@@ -39,3 +39,56 @@ defineTool({
   summarize: (i) => `complete_assignment — ${i.id.slice(0, 8)}${i.completed ? "" : " (reopened)"}`,
   run: ({ id, ...rest }, ctx) => st.updateAssignment(ctx.user.id, id, rest),
 });
+
+defineTool({
+  name: "create_subject", module: "studies", risk: "low",
+  description: "Create a subject, course, language or certification to track study time against, with an optional weekly goal in minutes. The German course already exists as the subject 'German' — never create a second one for it.",
+  schema: st.subjectSchema,
+  summarize: (i) => `create_subject — ${i.name}`,
+  run: (i, ctx) => st.createSubject(ctx.user.id, i),
+});
+defineTool({
+  name: "delete_subject", module: "studies", risk: "high",
+  description: "Delete a subject. Its study sessions, exams and assignments are kept but stop belonging to a subject, so the progress per subject changes. Always confirmed, and the subject's exact name must be given.",
+  schema: z.object({ id: z.string().uuid(), name: z.string().min(1).max(100).describe("The subject's exact name, for the confirmation") }),
+  summarize: (i) => `delete_subject — "${i.name}"`,
+  needsConfirmation: (i) => `Permanently delete the subject "${i.name}" (its sessions, exams and assignments stay but lose their subject)`,
+  run: async (i, ctx) => {
+    const subject = (await st.listSubjects(ctx.user.id)).find((s) => s.id === i.id);
+    if (!subject) throw new Error("Subject not found");
+    if (subject.name.trim().toLowerCase() !== i.name.trim().toLowerCase()) throw new Error(`That id belongs to "${subject.name}", not "${i.name}". Nothing was deleted.`);
+    await st.deleteSubject(ctx.user.id, i.id);
+    return { deleted: i.id, name: subject.name };
+  },
+});
+defineTool({
+  name: "update_exam", module: "studies", risk: "low",
+  description: "Change an exam's date, title, location, notes or result. Find ids with get_study_schedule.",
+  schema: z.object({ id: z.string().uuid() }).extend(st.examSchema.partial().shape),
+  summarize: (i) => `update_exam — ${i.id.slice(0, 8)}${i.date ? " — " + i.date : ""}`,
+  run: ({ id, ...rest }, ctx) => st.updateExam(ctx.user.id, id, rest),
+});
+defineTool({
+  name: "delete_exam", module: "studies", risk: "medium",
+  description: "Delete an exam. Requires confirmation. Deadlines and study notifications stop counting it.",
+  schema: z.object({ id: z.string().uuid() }),
+  needsConfirmation: (i) => `Delete exam ${i.id.slice(0, 8)}`,
+  summarize: (i) => `delete_exam — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { await st.deleteExam(ctx.user.id, i.id); return { deleted: i.id }; },
+});
+defineTool({
+  name: "delete_assignment", module: "studies", risk: "medium",
+  description: "Delete an assignment. Requires confirmation. Use complete_assignment when it is simply done.",
+  schema: z.object({ id: z.string().uuid() }),
+  needsConfirmation: (i) => `Delete assignment ${i.id.slice(0, 8)}`,
+  summarize: (i) => `delete_assignment — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { await st.deleteAssignment(ctx.user.id, i.id); return { deleted: i.id }; },
+});
+defineTool({
+  name: "delete_study_session", module: "studies", risk: "medium",
+  description: "Delete a logged study session (a mistake, a duplicate). Requires confirmation. Study totals, goals and German minutes are recomputed from what is left.",
+  schema: z.object({ id: z.string().uuid() }),
+  needsConfirmation: (i) => `Delete study session ${i.id.slice(0, 8)}`,
+  summarize: (i) => `delete_study_session — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { await st.deleteStudySession(ctx.user.id, i.id); return { deleted: i.id }; },
+});

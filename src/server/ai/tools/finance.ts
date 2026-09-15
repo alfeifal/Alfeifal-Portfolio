@@ -75,3 +75,85 @@ defineTool({
     return fin.updateSavingsGoal(ctx.user.id, i.id, { currentAmount: i.currentAmount ?? g.currentAmount + (i.add ?? 0), targetAmount: g.targetAmount });
   },
 });
+
+defineTool({
+  name: "create_finance_account", module: "finance", risk: "low",
+  description: "Create a money account (checking, savings, cash, credit, investment, other) with its opening balance. Use get_accounts first to avoid creating a duplicate.",
+  schema: fin.accountSchema,
+  summarize: (i) => `create_finance_account — ${i.name}`,
+  run: (i, ctx) => fin.createAccount(ctx.user.id, i),
+});
+defineTool({
+  name: "update_finance_account", module: "finance", risk: "medium",
+  description: "Rename an account, change its type or currency, make it the default, or archive it. Balances come from transactions and are not editable here.",
+  schema: z.object({ id: z.string().uuid() }).extend(fin.accountSchema.partial().shape).extend({ archived: z.boolean().optional() }),
+  summarize: (i) => `update_finance_account — ${i.id.slice(0, 8)}`,
+  run: ({ id, ...rest }, ctx) => fin.updateAccount(ctx.user.id, id, rest),
+});
+defineTool({
+  name: "delete_finance_account", module: "finance", risk: "high",
+  description: "Delete a money account. Its transactions are kept but stop belonging to an account, which changes balances. Always confirmed, and the account's exact name must be given so the wrong one cannot be hit.",
+  schema: z.object({ id: z.string().uuid(), name: z.string().min(1).max(100).describe("The account's exact name, for the confirmation") }),
+  summarize: (i) => `delete_finance_account — "${i.name}"`,
+  needsConfirmation: (i) => `Permanently delete the account "${i.name}" (its transactions stay but lose their account)`,
+  run: async (i, ctx) => {
+    const account = (await fin.listAccounts(ctx.user.id)).find((a) => a.id === i.id);
+    if (!account) throw new Error("Account not found");
+    if (account.name.trim().toLowerCase() !== i.name.trim().toLowerCase()) throw new Error(`That id belongs to "${account.name}", not "${i.name}". Nothing was deleted.`);
+    await fin.deleteAccount(ctx.user.id, i.id);
+    return { deleted: i.id, name: account.name };
+  },
+});
+defineTool({
+  name: "create_finance_category", module: "finance", risk: "low",
+  description: "Create a spending or income category. add_expense and add_income already resolve categories by name and create one when needed, so use this only when the user explicitly wants a new category with a specific type, colour or icon.",
+  schema: fin.categorySchema,
+  summarize: (i) => `create_finance_category — ${i.name}`,
+  run: (i, ctx) => fin.createCategory(ctx.user.id, i),
+});
+defineTool({
+  name: "create_recurring_transaction", module: "finance", risk: "medium",
+  description: "Set up a recurring expense or income (rent, salary, subscriptions). It generates real transactions automatically from nextDate onwards, so confirm the amount and the schedule with the user first.",
+  schema: fin.recurringSchema,
+  needsConfirmation: (i) => `Create a recurring ${i.type} of ${i.amount} (${i.frequency}) starting ${i.nextDate}`,
+  summarize: (i) => `create_recurring_transaction — ${i.description ?? i.type} — ${i.amount} ${i.frequency}`,
+  run: (i, ctx) => fin.createRecurring(ctx.user.id, i),
+});
+defineTool({
+  name: "update_recurring_transaction", module: "finance", risk: "medium",
+  description: "Change a recurring transaction: amount, frequency, next date, end date, or pause it with active=false. Find ids with get_transactions or the finance screen.",
+  schema: z.object({ id: z.string().uuid() }).extend(fin.recurringSchema.partial().shape).extend({ active: z.boolean().optional() }),
+  summarize: (i) => `update_recurring_transaction — ${i.id.slice(0, 8)}`,
+  run: ({ id, ...rest }, ctx) => fin.updateRecurring(ctx.user.id, id, rest),
+});
+defineTool({
+  name: "delete_recurring_transaction", module: "finance", risk: "medium",
+  description: "Delete a recurring transaction. Transactions it already generated are kept. Requires confirmation.",
+  schema: z.object({ id: z.string().uuid() }),
+  needsConfirmation: (i) => `Delete recurring transaction ${i.id.slice(0, 8)}`,
+  summarize: (i) => `delete_recurring_transaction — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { await fin.deleteRecurring(ctx.user.id, i.id); return { deleted: i.id }; },
+});
+defineTool({
+  name: "create_savings_goal", module: "finance", risk: "low",
+  description: "Create a savings goal with its target amount and optional deadline and monthly contribution. Progress is updated with update_savings_goal.",
+  schema: fin.savingsGoalSchema,
+  summarize: (i) => `create_savings_goal — ${i.name} — ${i.targetAmount}`,
+  run: (i, ctx) => fin.createSavingsGoal(ctx.user.id, i),
+});
+defineTool({
+  name: "delete_savings_goal", module: "finance", risk: "medium",
+  description: "Delete a savings goal. The money itself is untouched: this only removes the tracker. Requires confirmation.",
+  schema: z.object({ id: z.string().uuid() }),
+  needsConfirmation: (i) => `Delete savings goal ${i.id.slice(0, 8)}`,
+  summarize: (i) => `delete_savings_goal — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { await fin.deleteSavingsGoal(ctx.user.id, i.id); return { deleted: i.id }; },
+});
+defineTool({
+  name: "delete_budget", module: "finance", risk: "medium",
+  description: "Remove a budget for a category. Spending is not affected, only the limit you track against. Requires confirmation.",
+  schema: z.object({ id: z.string().uuid() }),
+  needsConfirmation: (i) => `Delete budget ${i.id.slice(0, 8)}`,
+  summarize: (i) => `delete_budget — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { await fin.deleteBudget(ctx.user.id, i.id); return { deleted: i.id }; },
+});

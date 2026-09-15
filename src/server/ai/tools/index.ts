@@ -15,3 +15,5 @@ import "./memory";
 import "./snapshot";
 import "./planner";
 import "./notifications";
+import "./academy";
+import "./settings";
