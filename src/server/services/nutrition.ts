@@ -6,7 +6,7 @@ import { badRequest, notFound } from "@/server/http";
 import { dateSchema } from "./tasks";
 import { todayKey } from "@/lib/dates";
 import { round2 } from "@/lib/money";
-import { getPreferences } from "./users";
+import { getPreferences, patchPreferences } from "./users";
 
 /**
  * Nutrition arithmetic (single source of truth).
@@ -171,6 +171,22 @@ export async function deleteMeal(userId: string, id: string) {
 }
 export async function deleteEntry(userId: string, id: string) {
   await db.delete(nutritionEntries).where(and(eq(nutritionEntries.id, id), eq(nutritionEntries.userId, userId)));
+}
+
+/**
+ * Updates the daily targets. They live in the user's preferences (the existing source of truth — no
+ * second table), and the same energy/macro rule the entries obey is applied here: a target set that
+ * contradicts itself would make every "x% of your goal" reading meaningless. Returns the previous and
+ * the new values so the caller can show exactly what changed.
+ */
+export async function updateNutritionGoals(userId: string, input: z.infer<typeof nutritionGoalsSchema>) {
+  const check = consistencyOf(input);
+  if (!check.ok) {
+    throw badRequest(`These targets are not consistent: ${input.protein}g protein, ${input.carbs}g carbs and ${input.fat}g fat add up to ${check.macroCalories} kcal, not ${input.calories} kcal (off by ${check.delta}). Adjust the calories or the macros.`);
+  }
+  const previous = await nutritionGoals(userId);
+  await patchPreferences(userId, { nutritionGoals: input });
+  return { previous, goals: await nutritionGoals(userId) };
 }
 
 export async function nutritionGoals(userId: string) {

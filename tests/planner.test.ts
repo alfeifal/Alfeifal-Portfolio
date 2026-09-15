@@ -183,7 +183,7 @@ d("phase 3.2b — persistent planner", () => {
     expect(names).toContain("get_plan");
     for (const forbidden of ["accept_plan", "apply_plan", "confirm_plan", "materialize_plan", "materialise_plan", "execute_plan"]) expect(names).not.toContain(forbidden);
     expect(allTools().filter((t) => t.module === "planner").map((t) => t.name)).toEqual(["propose_plan", "get_plan"]);
-    expect(names).toHaveLength(77);
+    expect(new Set(names).size).toBe(names.length); // no duplicate tool names
   });
 
   it("get_plan reads back what was proposed, by id and by period", async () => {

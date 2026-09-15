@@ -189,6 +189,24 @@ summary reports the same check, so a day and a range can never tell different st
   bulk changes, real trades — or always when the user enables *confirm medium-risk*) · `high`
   (always confirm: transfers, investment transactions).
 
+### AI write capabilities
+Rule: **any user-editable application state gets a controlled AI action when that action is
+semantically appropriate for an assistant.** Always as an explicit per-domain tool that calls the
+domain service — never a generic `update_database(table, fields)`, never SQL, never a table, column or
+user id chosen by the model. A tool's reach is exactly the service's reach, so validation, ownership
+and the audit trail come for free.
+
+Risk follows impact: `low` for reversible, everyday actions (complete a task or an assignment, tick a
+milestone, mark notifications read), `medium` for persistent changes worth a second look (nutrition
+targets, a subject's weekly goal, shifting the training cycle, deleting one entry or one set) and
+`high` for destructive ones (delete a goal or a project), which always stop for confirmation. The two
+destructive tools take the record's **name** as well as its id: the confirmation card can then say
+exactly what disappears, and a name that does not match the id refuses to delete anything.
+
+Documented exceptions, where an AI action would be wrong rather than missing: accepting or rejecting a
+plan (the user's decision by design, phase 3.2b), the German module's own progress state (the module
+owns it), account security (password, sessions, account deletion), and conversation deletion.
+
 ## Market data (`src/server/market`)
 `QuoteProvider` / `NewsProvider` / `EconomicCalendarProvider` interfaces. Implemented: Finnhub
 (realtime, key), Stooq (delayed/EOD, no key), Yahoo Finance chart endpoint (delayed, no key, unofficial), CoinGecko (crypto, no key), RSS aggregator (13 public

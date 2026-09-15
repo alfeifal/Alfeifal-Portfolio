@@ -64,3 +64,25 @@ defineTool({
     return tr.updateDayExercise(ctx.user.id, i.routineExerciseId, { sets: i.sets, reps: i.reps, intensity: i.intensity, loadNote: i.loadNote, restSeconds: i.restSeconds, notes: i.notes });
   },
 });
+
+defineTool({
+  name: "update_training_plan", module: "training", risk: "medium",
+  description:
+    "Change the training plan's own settings: the date the 8-day cycle is anchored to (startDate — this shifts which day of the cycle every date falls on), its name or description, or make it the active plan. It does NOT touch the exercises: use modify_routine for those. Requires confirmation when the cycle is shifted, because every past and future day changes meaning.",
+  schema: z.object({ planId: z.string().uuid().optional(), startDate: dateSchema.optional(), name: z.string().max(100).optional(), description: z.string().max(1000).optional(), active: z.boolean().optional() }),
+  needsConfirmation: (i) => (i.startDate ? `Shift the training cycle to start on ${i.startDate}` : false),
+  summarize: (i) => `update_training_plan — ${i.startDate ? "start " + i.startDate : i.name ?? "settings"}`,
+  run: async ({ planId, ...rest }, ctx) => {
+    const plan = planId ? { id: planId } : await tr.activePlan(ctx.user.id);
+    if (!plan) throw new Error("No training plan found");
+    return tr.updatePlan(ctx.user.id, plan.id, rest);
+  },
+});
+defineTool({
+  name: "delete_workout_set", module: "training", risk: "medium",
+  description: "Delete one logged set (a mistyped weight, a duplicate). Requires confirmation. Find set ids with get_workout_session.",
+  schema: z.object({ id: z.string().uuid() }),
+  needsConfirmation: (i) => `Delete set ${i.id.slice(0, 8)}`,
+  summarize: (i) => `delete_workout_set — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { await tr.deleteSet(ctx.user.id, i.id); return { deleted: i.id }; },
+});

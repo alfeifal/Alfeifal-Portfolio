@@ -156,6 +156,6 @@ d("phase 3.3 — planner UI contracts and Home integration", () => {
     const names = allTools().map((t) => t.name);
     expect(allTools().filter((t) => t.module === "planner").map((t) => t.name)).toEqual(["propose_plan", "get_plan"]);
     for (const forbidden of ["accept_plan", "apply_plan", "materialize_plan", "execute_plan", "confirm_plan"]) expect(names).not.toContain(forbidden);
-    expect(names).toHaveLength(77);
+    expect(new Set(names).size).toBe(names.length); // no duplicate tool names
   });
 });

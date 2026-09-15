@@ -22,3 +22,20 @@ defineTool({
 });
 defineTool({ name: "create_exam", module: "studies", risk: "low", description: "Register an exam date for a subject (by name).", schema: z.object({ subject: z.string(), title: z.string(), date: dateSchema, notes: z.string().optional() }), summarize: (i) => `create_exam — ${i.title} — ${i.date}`, run: async (i, ctx) => st.createExam(ctx.user.id, { subjectId: await st.resolveSubject(ctx.user.id, { subject: i.subject }), title: i.title, date: i.date, notes: i.notes }) });
 defineTool({ name: "create_assignment", module: "studies", risk: "low", description: "Register an assignment with a due date.", schema: z.object({ subject: z.string(), title: z.string(), dueDate: dateSchema.optional(), description: z.string().optional() }), summarize: (i) => `create_assignment — ${i.title}`, run: async (i, ctx) => st.createAssignment(ctx.user.id, { subjectId: await st.resolveSubject(ctx.user.id, { subject: i.subject }), title: i.title, dueDate: i.dueDate, description: i.description }) });
+
+defineTool({
+  name: "update_subject", module: "studies", risk: "medium",
+  description:
+    "Update a subject: its name, colour, description or weekly study goal in minutes (weeklyGoalMinutes), or archive it. The weekly goal is what the study-consistency notifications and the study progress screen measure against. Find the subject id with get_study_schedule.",
+  schema: z.object({ id: z.string().uuid(), name: z.string().max(100).optional(), weeklyGoalMinutes: z.number().int().min(0).max(10080).optional(), description: z.string().max(2000).optional(), color: z.string().max(20).optional(), archived: z.boolean().optional() }),
+  needsConfirmation: (i) => (i.archived ? "Archive subject" : false),
+  summarize: (i) => `update_subject — ${i.id.slice(0, 8)}${i.weeklyGoalMinutes != null ? ` — ${i.weeklyGoalMinutes} min/week` : ""}`,
+  run: ({ id, ...rest }, ctx) => st.updateSubject(ctx.user.id, id, rest),
+});
+defineTool({
+  name: "complete_assignment", module: "studies", risk: "low",
+  description: "Mark an assignment as done (or reopen it with completed=false). Find its id with get_study_schedule.",
+  schema: z.object({ id: z.string().uuid(), completed: z.boolean().default(true), grade: z.string().max(20).optional() }),
+  summarize: (i) => `complete_assignment — ${i.id.slice(0, 8)}${i.completed ? "" : " (reopened)"}`,
+  run: ({ id, ...rest }, ctx) => st.updateAssignment(ctx.user.id, id, rest),
+});

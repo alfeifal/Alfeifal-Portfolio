@@ -55,3 +55,29 @@ defineTool({
 defineTool({ name: "get_daily_nutrition", module: "nutrition", risk: "read", description: "Meals and totals vs goals for a date (default today), with counts of exact vs estimated items.", schema: z.object({ date: dateSchema.optional() }), run: (i, ctx) => n.dailyNutrition(ctx.user.id, i.date ?? todayKey(ctx.user.timezone)) });
 defineTool({ name: "get_nutrition_summary", module: "nutrition", risk: "read", description: "Daily totals and averages for a range (default last 7 days).", schema: z.object({ from: dateSchema.optional(), to: dateSchema.optional() }), run: (i, ctx) => { const to = i.to ?? todayKey(ctx.user.timezone); return n.nutritionSummary(ctx.user.id, { from: i.from ?? addDaysKey(to, -6), to }); } });
 defineTool({ name: "delete_meal", module: "nutrition", risk: "medium", description: "Delete a logged meal. Requires confirmation.", schema: z.object({ id: z.string().uuid() }), needsConfirmation: () => "Delete meal", summarize: (i) => `delete_meal — ${i.id.slice(0, 8)}`, run: async (i, ctx) => { await n.deleteMeal(ctx.user.id, i.id); return { deleted: i.id }; } });
+
+defineTool({
+  name: "update_nutrition_targets", module: "nutrition", risk: "medium",
+  description:
+    "Change the user's daily nutrition targets (calories, protein, carbs, fat). Always requires confirmation, and the four numbers must be consistent with each other (protein×4 + carbs×4 + fat×9 ≈ calories) or the change is refused with an explanation. Read the current targets with get_daily_nutrition first when the user asks for a relative change ('add 200 kcal'). The result carries the previous and the new values: report both.",
+  schema: n.nutritionGoalsSchema,
+  needsConfirmation: (i) => `Set daily targets to ${i.calories} kcal · ${i.protein}P / ${i.carbs}C / ${i.fat}F`,
+  summarize: (i) => `update_nutrition_targets — ${i.calories} kcal · ${i.protein}/${i.carbs}/${i.fat}`,
+  run: (i, ctx) => n.updateNutritionGoals(ctx.user.id, i),
+});
+defineTool({
+  name: "create_food", module: "nutrition", risk: "low",
+  description:
+    "Save a food the user eats often, with its values PER SERVING and optionally how many grams one serving weighs. Once saved, log_meal can reference it by name and the values count as database data instead of an estimate.",
+  schema: n.foodSchema.omit({ source: true }).extend({ servingGrams: z.number().positive().optional() }),
+  summarize: (i) => `create_food — ${i.name}`,
+  run: (i, ctx) => n.createFood(ctx.user.id, n.foodSchema.parse({ ...i, source: "user" })),
+});
+defineTool({
+  name: "delete_nutrition_entry", module: "nutrition", risk: "medium",
+  description: "Remove one item from a logged meal (a mistake, a duplicate). Requires confirmation. Use get_daily_nutrition to find the item id.",
+  schema: z.object({ id: z.string().uuid() }),
+  needsConfirmation: (i) => `Delete meal item ${i.id.slice(0, 8)}`,
+  summarize: (i) => `delete_nutrition_entry — ${i.id.slice(0, 8)}`,
+  run: async (i, ctx) => { await n.deleteEntry(ctx.user.id, i.id); return { deleted: i.id }; },
+});

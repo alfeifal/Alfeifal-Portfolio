@@ -14,3 +14,4 @@ import "./german";
 import "./memory";
 import "./snapshot";
 import "./planner";
+import "./notifications";
