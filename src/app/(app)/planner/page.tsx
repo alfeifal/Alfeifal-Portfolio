@@ -25,9 +25,9 @@ export default function PlannerPage() {
   const [busy, setBusy] = useState(false);
   const [instructions, setInstructions] = useState("");
   const [error, setError] = useState("");
-  const run = async (horizon: "today" | "week", apply: boolean) => {
+  const run = async (horizon: "today" | "week") => {
     setBusy(true); setError("");
-    try { const r = await api<typeof plan & object>("/api/ai/planner", { method: "POST", json: { horizon, instructions: instructions || undefined, apply, conversationId: plan?.conversationId } }); setPlan(r); events.refresh(); tasks.refresh(); if (apply) toast.success("Plan applied", `${r.actions.length} action(s)`); } catch (e) { setError((e as Error).message); toast.error("Planner failed", (e as Error).message); } finally { setBusy(false); }
+    try { const r = await api<typeof plan & object>("/api/ai/planner", { method: "POST", json: { horizon, instructions: instructions || undefined, conversationId: plan?.conversationId } }); setPlan(r); events.refresh(); tasks.refresh(); toast.success("Plan saved as a draft", "Nothing was created yet — accept it to turn it into tasks and events"); } catch (e) { setError((e as Error).message); toast.error("Planner failed", (e as Error).message); } finally { setBusy(false); }
   };
   const cycleDay = (k: string) => { if (!training.data) return null; const diff = Math.round((new Date(k + "T00:00:00").getTime() - new Date(training.data.startDate + "T00:00:00").getTime()) / 86400e3); const idx = ((diff % training.data.cycleLength) + training.data.cycleLength) % training.data.cycleLength; return training.data.days.find((d) => d.dayIndex === idx) ?? null; };
   const dayEvents = (k: string) => (events.data ?? []).filter((e) => e.startAt.slice(0, 10) === k || (e.allDay && e.startAt.slice(0, 10) <= k && e.endAt.slice(0, 10) > k));
@@ -53,10 +53,10 @@ export default function PlannerPage() {
       <Card title="AI planner">
         {!aiConfigured && <p className="mb-2 text-sm muted">AI not configured.</p>}
         <textarea className="field" rows={2} placeholder="Constraints, e.g. “I work Mon–Fri 10–18, gym after work, German after dinner, exam Friday”" value={instructions} onChange={(e) => setInstructions(e.target.value)} />
+        <p className="mt-1.5 text-xs muted">The assistant always saves a draft: nothing reaches your calendar or tasks until you accept it.</p>
         <div className="mt-2 flex flex-wrap gap-2">
-          <Button variant="primary" size="sm" loading={busy} disabled={!aiConfigured} onClick={() => run("today", false)}>Plan today</Button>
-          <Button variant="primary" size="sm" disabled={busy || !aiConfigured} onClick={() => run("week", false)}>Organize my week</Button>
-          <button className="btn-ghost btn-sm" disabled={busy || !aiConfigured || !plan} onClick={() => run("week", true)} title="Creates the calendar events/tasks of the proposed plan">Apply plan to calendar</button>
+          <Button variant="primary" size="sm" loading={busy} disabled={!aiConfigured} onClick={() => run("today")}>Plan today</Button>
+          <Button variant="primary" size="sm" disabled={busy || !aiConfigured} onClick={() => run("week")}>Organize my week</Button>
         </div>
         {busy && <Spinner label="Planning…" />}
         {error && <p className="mt-2 text-sm text-negative">{error}</p>}

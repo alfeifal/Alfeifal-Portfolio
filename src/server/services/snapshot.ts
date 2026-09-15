@@ -12,6 +12,7 @@ import { weeklyTrainingStatus, workoutForDate } from "./training";
 import { germanSummary } from "./german";
 import { financialSummary } from "./finance";
 import { dailyNutrition } from "./nutrition";
+import { plannerSnapshot } from "./planner";
 import { addDaysKey, todayKey } from "@/lib/dates";
 
 /**
@@ -21,11 +22,11 @@ import { addDaysKey, todayKey } from "@/lib/dates";
  * rendering, hard size cap) and the `get_snapshot` tool (any section, on demand). Home, the planner
  * and the reviews are meant to reuse it in later phases instead of re-assembling the same data.
  */
-export const SNAPSHOT_SECTIONS = ["tasks", "calendar", "goals", "projects", "training", "studies", "german", "finance", "nutrition", "reviews"] as const;
+export const SNAPSHOT_SECTIONS = ["tasks", "calendar", "goals", "projects", "training", "studies", "german", "finance", "nutrition", "reviews", "plan"] as const;
 export type SnapshotSection = (typeof SNAPSHOT_SECTIONS)[number];
 
 /** Sections cheap and useful enough to sit in every system prompt. The rest is fetched with get_snapshot. */
-export const COMPACT_SECTIONS: SnapshotSection[] = ["tasks", "calendar", "goals", "projects", "training", "studies", "german", "finance", "reviews"];
+export const COMPACT_SECTIONS: SnapshotSection[] = ["tasks", "calendar", "goals", "projects", "training", "studies", "german", "finance", "plan", "reviews"];
 
 /**
  * Context budget. The snapshot block of the system prompt is capped at this many characters
@@ -130,6 +131,9 @@ const LOADERS: { [K in SnapshotSection]: (c: Ctx) => Promise<unknown> } = {
     const n = await dailyNutrition(c.userId, c.today).catch(() => null);
     return n ? { date: c.today, totals: n.totals, goals: n.goals, meals: n.meals.length, estimatedItems: n.estimatedItems } : null;
   },
+  async plan(c) {
+    return plannerSnapshot(c.userId, c.tz);
+  },
   async reviews(c) {
     const [daily, weekly] = await Promise.all([latestReportRow(c.userId, "daily_review"), latestReportRow(c.userId, "weekly_review")]);
     const slim = (r: Awaited<ReturnType<typeof latestReportRow>>) => (r ? { periodKey: r.periodKey, createdAt: r.createdAt, excerpt: r.content.slice(0, 400) } : null);
@@ -167,6 +171,7 @@ type StudySec = Sec<{ minutesLast7Days: number; nextExams: { title: string; date
 type GermanSec = Sec<{ minutesLast7Days: number; streak: number; unitsPassed: number } | null>;
 type FinSec = Sec<{ income: number; expenses: number; net: number; topCategories: { name: string; total: number }[]; budgetsAtRisk: { name: string; pct: number }[] } | null>;
 type RevSec = Sec<{ daily: { periodKey: string } | null; weekly: { periodKey: string } | null }>;
+type PlanSec = Sec<{ day: { id: string; status: string; items: unknown[]; pendingItems: number } | null; week: { id: string; status: string; pendingItems: number } | null; draftsAwaitingAnswer: number }>;
 
 /**
  * Compact rendering for the system prompt: one line per section, ids shortened, lists clipped.
@@ -210,6 +215,11 @@ export function renderCompact(snap: LifeSnapshot): string[] {
   if (f) {
     lines.push(`- Finance this month: income ${f.income}, expenses ${f.expenses}, net ${f.net}${f.topCategories.length ? `, top ${f.topCategories.map((x) => `${x.name} ${x.total}`).join(", ")}` : ""}`);
     if (f.budgetsAtRisk.length) lines.push(`  Budgets at or above 80%: ${f.budgetsAtRisk.map((b) => `${b.name} ${b.pct}%`).join("; ")}`);
+  }
+  const pl = s.plan as PlanSec;
+  if (pl) {
+    const d = pl.day;
+    lines.push(`- Plan for today: ${d ? `${d.status} · ${d.items.length} items${d.pendingItems ? ` · ${d.pendingItems} awaiting the user's acceptance` : ""} (plan ${d.id.slice(0, 8)})` : "none"}${pl.week ? ` · week plan ${pl.week.status}` : ""}. Read it with get_plan; you cannot accept it yourself.`);
   }
   const r = s.reviews as RevSec;
   if (r) lines.push(`- Last reviews: daily ${r.daily?.periodKey ?? "none yet"} · weekly ${r.weekly?.periodKey ?? "none yet"}. Call get_snapshot(["reviews"]) to read them.`);

@@ -13,3 +13,4 @@ import "./market";
 import "./german";
 import "./memory";
 import "./snapshot";
+import "./planner";

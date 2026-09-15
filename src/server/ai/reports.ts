@@ -98,10 +98,16 @@ export async function marketBrief(user: SessionUser) {
   return saveReport(user.id, "market_brief", day, content, data);
 }
 
-/** Personal Planner (spec §45): reasons over calendar/tasks/goals/projects/training/studies; may create events/tasks via tools. */
-export async function plan(user: SessionUser, opts: { horizon: "today" | "week"; instructions?: string; conversationId?: string | null; apply?: boolean }) {
-  const extra = `PLANNER MODE (${opts.horizon}). First gather data with get_calendar (includeFreeSlots=true), get_tasks (today + upcoming + overdue), get_goals, get_projects, get_today_workout, get_study_schedule and get_german_progress. Then produce a prioritised plan based on deadlines, importance and free time — never invent arbitrary tasks. ${opts.apply ? "Apply the plan: create the calendar events/tasks needed (use create_events for batches)." : "Do NOT create anything unless the user explicitly asked; propose the plan and offer to apply it."}`;
-  return chat(user, { conversationId: opts.conversationId ?? null, kind: "planner", text: opts.instructions?.trim() ? opts.instructions : opts.horizon === "today" ? "What should I do today? Build my plan." : "Organize my week.", systemExtra: extra, maxRounds: 12 });
+/**
+ * Personal Planner (spec §45, phase 3.2b): reasons over calendar/tasks/goals/projects/training/studies
+ * and saves the result as a DRAFT with `propose_plan`. It cannot create anything real — planner mode is
+ * restricted to read tools plus propose_plan — so applying a plan stays an explicit action of the user.
+ */
+const PLANNER_TOOLS = ["get_snapshot", "get_plan", "propose_plan", "get_calendar", "get_tasks", "get_goals", "get_projects", "get_today_workout", "get_training_plan", "get_study_schedule", "get_german_progress", "get_financial_summary"];
+export async function plan(user: SessionUser, opts: { horizon: "today" | "week"; instructions?: string; conversationId?: string | null }) {
+  const horizon = opts.horizon === "week" ? "week" : "day";
+  const extra = `PLANNER MODE (${opts.horizon}). First gather the real data: get_snapshot, get_calendar (includeFreeSlots=true), get_tasks (today + upcoming + overdue), get_goals, get_projects, get_today_workout, get_study_schedule and get_german_progress. Then produce a prioritised plan based on deadlines, importance and free time — never invent arbitrary tasks, never schedule training on a rest day of the cycle. Finally SAVE it by calling propose_plan with horizon "${horizon}" and one item per block. You cannot create tasks or events here and you must not claim the plan was applied: it is a draft waiting for the user to accept it in the Planner.`;
+  return chat(user, { conversationId: opts.conversationId ?? null, kind: "planner", text: opts.instructions?.trim() ? opts.instructions : opts.horizon === "today" ? "What should I do today? Build my plan." : "Organize my week.", systemExtra: extra, maxRounds: 12, allowedTools: PLANNER_TOOLS });
 }
 
 /** Quick entry (spec §30): one sentence → the right record(s). */
