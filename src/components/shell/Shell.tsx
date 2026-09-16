@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { Bell, ChevronsLeft, ChevronsRight, Menu, Search, Zap, LogOut } from "lucide-react";
@@ -10,8 +11,15 @@ import { api } from "@/lib/client";
 import { MotionProvider, PageTransition, T } from "@/components/motion";
 import { ToastProvider } from "@/components/toast";
 import { Tooltip } from "@/components/ui";
-import { QuickEntry } from "./QuickEntry";
-import { CommandPalette } from "./CommandPalette";
+/**
+ * Quick entry and the command palette are overlays: nothing of them is on screen until ⌘J / ⌘K or a
+ * click on the header. Loading them with the Shell put their code (and the AI stream client and the
+ * search result renderer they pull in) into the chunk every page downloads before it can hydrate —
+ * measured at 5.9 kB gzip across two chunks. They are imported on demand instead and mounted as soon
+ * as the browser goes idle, so they are ready long before anyone can reach for a shortcut.
+ */
+const QuickEntry = dynamic(() => import("./QuickEntry").then((mod) => mod.QuickEntry), { ssr: false });
+const CommandPalette = dynamic(() => import("./CommandPalette").then((mod) => mod.CommandPalette), { ssr: false });
 
 interface ShellUser { name: string; email: string; currency: string }
 const ShellCtx = createContext<{ user: ShellUser; aiConfigured: boolean; unread: number; refreshUnread: () => void; openQuick: () => void; openPalette: () => void }>({ user: { name: "", email: "", currency: "EUR" }, aiConfigured: false, unread: 0, refreshUnread: () => {}, openQuick: () => {}, openPalette: () => {} });
@@ -27,9 +35,22 @@ export function Shell({ user, aiConfigured, children }: { user: ShellUser; aiCon
   const [palette, setPalette] = useState(false);
   const [unread, setUnread] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
+  // Flips once the first idle slice arrives; from then on the overlays stay mounted, so their exit
+  // animations play exactly as before.
+  const [overlays, setOverlays] = useState(false);
   const refreshUnread = () => api<{ unread: number }>("/api/notifications?limit=1").then((r) => setUnread(r.unread)).catch(() => {});
   useEffect(() => { refreshUnread(); const t = setInterval(refreshUnread, 120000); try { setCollapsed(localStorage.getItem("pos-sidebar") === "collapsed"); } catch {} return () => clearInterval(t); }, []);
   useEffect(() => { setMenu(false); }, [pathname]);
+  useEffect(() => {
+    const w = window as typeof window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number; cancelIdleCallback?: (h: number) => void };
+    if (w.requestIdleCallback) {
+      const handle = w.requestIdleCallback(() => setOverlays(true), { timeout: 2000 });
+      return () => w.cancelIdleCallback?.(handle);
+    }
+    // Safari has no idle callback; the next frame is still after the first paint.
+    const frame = requestAnimationFrame(() => setOverlays(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
   useEffect(() => {
     if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") navigator.serviceWorker.register("/sw.js").catch(() => {});
     const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((v) => !v); } if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") { e.preventDefault(); setQuick(true); } };
@@ -106,8 +127,8 @@ export function Shell({ user, aiConfigured, children }: { user: ShellUser; aiCon
               </nav>
             </div>
           </div>
-          <QuickEntry open={quick} onClose={() => setQuick(false)} />
-          <CommandPalette open={palette} onClose={() => setPalette(false)} onQuick={() => { setPalette(false); setQuick(true); }} />
+          {(overlays || quick) && <QuickEntry open={quick} onClose={() => setQuick(false)} />}
+          {(overlays || palette) && <CommandPalette open={palette} onClose={() => setPalette(false)} onQuick={() => { setPalette(false); setQuick(true); }} />}
         </ShellCtx.Provider>
       </ToastProvider>
     </MotionProvider>

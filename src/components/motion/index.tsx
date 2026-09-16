@@ -1,7 +1,8 @@
 "use client";
-import { LazyMotion, MotionConfig, domAnimation, m, AnimatePresence, useReducedMotion, animate, useInView } from "motion/react";
+import { LazyMotion, MotionConfig, domAnimation, m, AnimatePresence, useReducedMotion, useInView } from "motion/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { DUR, STAGGER, T, V } from "./tokens";
+import { DUR, EASE, STAGGER, T, V } from "./tokens";
+import { cubicBezier } from "./ease";
 
 export { m, AnimatePresence, useReducedMotion };
 export * from "./tokens";
@@ -73,19 +74,40 @@ export function AnimatedItem({ children, className, as = "li" }: { children: Rea
   );
 }
 
-/** Fast count-up for important metrics only. Formats via `format`; respects reduced motion. */
+const easeOut = cubicBezier(...EASE.out);
+
+/**
+ * Fast count-up for important metrics only. Formats via `format`; respects reduced motion.
+ *
+ * Driven by `requestAnimationFrame` rather than Motion's `animate()`: same curve (`EASE.out`), same
+ * duration, same reduced-motion behaviour, but it keeps Motion's imperative animation engine out of
+ * the chunk every page downloads. See `./ease` for the numbers.
+ */
 export function AnimatedNumber({ value, format = (v) => String(Math.round(v)), className, duration = DUR.number }: { value: number; format?: (v: number) => string; className?: string; duration?: number }) {
   const reduced = useReducedMotion();
-  const ref = useRef<HTMLSpanElement>(null);
   const from = useRef(0);
   const [text, setText] = useState(() => format(reduced ? value : 0));
   useEffect(() => {
     if (reduced || !Number.isFinite(value)) { setText(format(value)); from.current = value; return; }
-    const controls = animate(from.current, value, { duration, ease: T.enter.ease, onUpdate: (v) => setText(format(v)) });
-    from.current = value;
-    return () => controls.stop();
-  }, [value, reduced]);
-  return <span ref={ref} className={className}>{text}</span>;
+    const start = from.current;
+    const delta = value - start;
+    // A value that did not move has nothing to animate — and starting a frame loop for it would
+    // repaint the number on every mount.
+    if (delta === 0 || duration <= 0) { setText(format(value)); from.current = value; return; }
+    let raf = 0;
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const p = (now - t0) / (duration * 1000);
+      if (p >= 1) { setText(format(value)); from.current = value; return; }
+      setText(format(start + delta * easeOut(p)));
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    // Interrupted mid-flight (the value changed again): the next run starts from this target, which
+    // is what `animate()` did — it never rewinds to whatever was on screen.
+    return () => { cancelAnimationFrame(raf); from.current = value; };
+  }, [value, reduced, duration]);
+  return <span className={className}>{text}</span>;
 }
 
 /** Presence wrapper for overlays (modals, dropdowns, toasts). */
