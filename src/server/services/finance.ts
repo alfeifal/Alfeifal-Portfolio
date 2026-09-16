@@ -7,6 +7,7 @@ import { dateSchema } from "./tasks";
 import { round2 } from "@/lib/money";
 import { addDaysKey, todayKey } from "@/lib/dates";
 import { emitDomainEvent } from "@/server/events/bus";
+import { assertOwned } from "@/server/ownership";
 
 export const accountSchema = z.object({
   name: z.string().min(1).max(100),
@@ -144,6 +145,8 @@ export async function createTransaction(userId: string, input: z.infer<typeof tr
   if (!categoryId && input.category && input.type !== "transfer") categoryId = (await resolveCategory(userId, input.category, input.type)).id;
   const accountId = input.accountId ?? (await defaultAccountId(userId));
   if (input.type === "transfer" && !input.toAccountId) throw badRequest("Transfers need a destination account");
+  await assertOwned(userId, { account: input.accountId, category: input.categoryId });
+  await assertOwned(userId, { account: input.toAccountId });
   const { category: _c, ...rest } = input;
   const [t] = await db
     .insert(transactions)
@@ -155,6 +158,8 @@ export async function createTransaction(userId: string, input: z.infer<typeof tr
 }
 export async function updateTransaction(userId: string, id: string, input: z.infer<typeof transactionUpdateSchema>) {
   const current = await getTransaction(userId, id);
+  await assertOwned(userId, { account: input.accountId, category: input.categoryId });
+  await assertOwned(userId, { account: input.toAccountId });
   let categoryId = input.categoryId;
   if (categoryId === undefined && input.category) categoryId = (await resolveCategory(userId, input.category, (input.type ?? current.type) as "expense" | "income")).id;
   const { category: _c, ...rest } = input;
@@ -229,6 +234,7 @@ export async function listBudgets(userId: string) {
   return db.select({ b: budgets, categoryName: categories.name }).from(budgets).leftJoin(categories, eq(categories.id, budgets.categoryId)).where(eq(budgets.userId, userId)).then((r) => r.map((x) => ({ ...x.b, categoryName: x.categoryName })));
 }
 export async function upsertBudget(userId: string, input: z.infer<typeof budgetSchema>) {
+  await assertOwned(userId, { category: input.categoryId });
   const existing = await db.select().from(budgets).where(and(eq(budgets.userId, userId), input.categoryId ? eq(budgets.categoryId, input.categoryId) : sql`${budgets.categoryId} is null`)).limit(1);
   if (existing[0]) {
     const [b] = await db.update(budgets).set({ amount: input.amount, period: input.period }).where(eq(budgets.id, existing[0].id)).returning();
@@ -246,10 +252,12 @@ export async function listRecurring(userId: string) {
   return db.select().from(recurringTransactions).where(eq(recurringTransactions.userId, userId)).orderBy(asc(recurringTransactions.nextDate));
 }
 export async function createRecurring(userId: string, input: z.infer<typeof recurringSchema>) {
+  await assertOwned(userId, { account: input.accountId, category: input.categoryId });
   const [r] = await db.insert(recurringTransactions).values({ ...input, userId }).returning();
   return r;
 }
 export async function updateRecurring(userId: string, id: string, input: Partial<z.infer<typeof recurringSchema>>) {
+  await assertOwned(userId, { account: input.accountId, category: input.categoryId });
   const [r] = await db.update(recurringTransactions).set(input).where(and(eq(recurringTransactions.id, id), eq(recurringTransactions.userId, userId))).returning();
   if (!r) throw notFound("Recurring transaction");
   return r;
@@ -290,10 +298,12 @@ export async function listSavingsGoals(userId: string) {
   return db.select().from(savingsGoals).where(eq(savingsGoals.userId, userId)).orderBy(asc(savingsGoals.deadline));
 }
 export async function createSavingsGoal(userId: string, input: z.infer<typeof savingsGoalSchema>) {
+  await assertOwned(userId, { account: input.accountId });
   const [g] = await db.insert(savingsGoals).values({ ...input, userId }).returning();
   return g;
 }
 export async function updateSavingsGoal(userId: string, id: string, input: Partial<z.infer<typeof savingsGoalSchema>>) {
+  await assertOwned(userId, { account: input.accountId });
   const [g] = await db.update(savingsGoals).set({ ...input, completedAt: input.currentAmount != null && input.targetAmount != null && input.currentAmount >= input.targetAmount ? new Date() : undefined }).where(and(eq(savingsGoals.id, id), eq(savingsGoals.userId, userId))).returning();
   if (!g) throw notFound("Savings goal");
   return g;

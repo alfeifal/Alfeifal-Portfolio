@@ -11,6 +11,12 @@ const RENEW_AFTER_MS = 24 * 60 * 60 * 1000; // extend at most once a day
 
 export type SessionUser = typeof users.$inferSelect;
 
+/**
+ * Administration only. It says nothing about whose data may be read: every user-scoped query is
+ * filtered by the session's own user id whatever the role is.
+ */
+export const isAdmin = (user: { role: SessionUser["role"] } | null | undefined) => user?.role === "admin";
+
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
 export function cookieOptions(expires: Date) {
@@ -53,7 +59,9 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     .select({ session: sessions, user: users })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
-    .where(and(eq(sessions.tokenHash, hashToken(token)), gt(sessions.expiresAt, now)))
+    // A deactivated account stops resolving here, so every live session it still holds goes dead at
+    // once — the check lives in the one place the whole app reads identity from, not per route.
+    .where(and(eq(sessions.tokenHash, hashToken(token)), gt(sessions.expiresAt, now), eq(users.isActive, true)))
     .limit(1);
   const hit = row[0];
   if (!hit) return null;

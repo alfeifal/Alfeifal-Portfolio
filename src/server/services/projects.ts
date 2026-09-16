@@ -7,6 +7,7 @@ import { dateSchema, prioritySchema } from "./tasks";
 import { deriveProgress } from "./progress";
 import { audit, type AuditActor } from "@/server/audit";
 import { todayKey } from "@/lib/dates";
+import { assertOwned } from "@/server/ownership";
 
 export const projectStatusSchema = z.enum(["idea", "planning", "active", "on_hold", "completed", "archived"]);
 export const projectCreateSchema = z.object({
@@ -23,14 +24,21 @@ export const projectCreateSchema = z.object({
 });
 export const projectUpdateSchema = projectCreateSchema.partial();
 
-/** The counts `deriveProgress` needs, as correlated subqueries so one row comes back per project. */
+/**
+ * The counts `deriveProgress` needs, as correlated subqueries so one row comes back per project.
+ *
+ * Each subquery matches the owner as well as the project: a row that points at this project but
+ * belongs to another account must not be counted. It cannot normally happen — every foreign key is
+ * ownership-checked before it is stored — but the counters feed a persisted progress value, so they
+ * carry the filter themselves rather than trusting the writers.
+ */
 const projectCounts = {
-  openTasks: sql<number>`(select count(*) from tasks t where t.project_id = projects.id and t.status in ('todo','in_progress'))`,
-  doneTasks: sql<number>`(select count(*) from tasks t where t.project_id = projects.id and t.status = 'done')`,
-  totalMilestones: sql<number>`(select count(*) from milestones m where m.project_id = projects.id)`,
-  doneMilestones: sql<number>`(select count(*) from milestones m where m.project_id = projects.id and m.completed_at is not null)`,
-  overdueMilestones: sql<number>`(select count(*) from milestones m where m.project_id = projects.id and m.completed_at is null and m.due_date is not null and m.due_date < current_date)`,
-  overdueTasks: sql<number>`(select count(*) from tasks t where t.project_id = projects.id and t.status in ('todo','in_progress') and t.due_date is not null and t.due_date < current_date)`,
+  openTasks: sql<number>`(select count(*) from tasks t where t.project_id = projects.id and t.user_id = projects.user_id and t.status in ('todo','in_progress'))`,
+  doneTasks: sql<number>`(select count(*) from tasks t where t.project_id = projects.id and t.user_id = projects.user_id and t.status = 'done')`,
+  totalMilestones: sql<number>`(select count(*) from milestones m where m.project_id = projects.id and m.user_id = projects.user_id)`,
+  doneMilestones: sql<number>`(select count(*) from milestones m where m.project_id = projects.id and m.user_id = projects.user_id and m.completed_at is not null)`,
+  overdueMilestones: sql<number>`(select count(*) from milestones m where m.project_id = projects.id and m.user_id = projects.user_id and m.completed_at is null and m.due_date is not null and m.due_date < current_date)`,
+  overdueTasks: sql<number>`(select count(*) from tasks t where t.project_id = projects.id and t.user_id = projects.user_id and t.status in ('todo','in_progress') and t.due_date is not null and t.due_date < current_date)`,
 };
 
 const withProgress = <T extends { progress: number }>(project: T, c: Record<keyof typeof projectCounts, number>) => {
@@ -104,6 +112,7 @@ export async function getProject(userId: string, id: string) {
 }
 
 export async function createProject(userId: string, input: z.infer<typeof projectCreateSchema>, actor: AuditActor = "user") {
+  await assertOwned(userId, { goal: input.goalId });
   const [p] = await db.insert(projects).values({ ...input, userId, progress: input.progress ?? 0, completedAt: input.status === "completed" ? new Date() : null }).returning();
   await audit({ userId, actor, action: "project.created", entityType: "project", entityId: p.id, metadata: { name: p.name, status: p.status } });
   return p;
@@ -111,6 +120,7 @@ export async function createProject(userId: string, input: z.infer<typeof projec
 
 export async function updateProject(userId: string, id: string, input: z.infer<typeof projectUpdateSchema>, actor: AuditActor = "user") {
   const current = await getProject(userId, id);
+  await assertOwned(userId, { goal: input.goalId });
   // Completing keeps the original completion date; leaving "completed" clears it. An update that does
   // not mention status leaves it alone, so editing notes never re-dates a finished project.
   const completedAt = input.status === undefined ? undefined : input.status === "completed" ? current.completedAt ?? new Date() : null;

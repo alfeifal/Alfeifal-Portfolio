@@ -5,6 +5,7 @@ import { tasks } from "@/server/db/schema";
 import { notFound } from "@/server/http";
 import { addDaysKey, todayKey } from "@/lib/dates";
 import { emitDomainEvent } from "@/server/events/bus";
+import { assertOwned } from "@/server/ownership";
 
 export const prioritySchema = z.enum(["low", "medium", "high", "urgent"]);
 export const taskStatusSchema = z.enum(["todo", "in_progress", "done", "cancelled"]);
@@ -59,12 +60,14 @@ export async function getTask(userId: string, id: string) {
 }
 
 export async function createTask(userId: string, input: TaskCreate) {
+  await assertOwned(userId, { project: input.projectId, goal: input.goalId, milestone: input.milestoneId });
   const [t] = await db.insert(tasks).values({ ...input, userId, completedAt: input.status === "done" ? new Date() : null }).returning();
   return t;
 }
 
 export async function updateTask(userId: string, id: string, input: z.infer<typeof taskUpdateSchema>, tz?: string) {
   const prev = await getTask(userId, id);
+  await assertOwned(userId, { project: input.projectId, goal: input.goalId, milestone: input.milestoneId });
   const patch: Partial<typeof tasks.$inferInsert> = { ...input };
   if (input.status === "done" && prev.status !== "done") patch.completedAt = new Date();
   else if (input.status && input.status !== "done") patch.completedAt = null;
@@ -78,7 +81,7 @@ export async function updateTask(userId: string, id: string, input: z.infer<type
 /** Completing a recurring task spawns the next occurrence. */
 export async function completeTask(userId: string, id: string, tz?: string) {
   const t = await getTask(userId, id);
-  const [done] = await db.update(tasks).set({ status: "done", completedAt: new Date() }).where(eq(tasks.id, id)).returning();
+  const [done] = await db.update(tasks).set({ status: "done", completedAt: new Date() }).where(and(eq(tasks.id, id), eq(tasks.userId, userId))).returning();
   let next: typeof tasks.$inferSelect | null = null;
   if (t.recurrence && t.dueDate) {
     const nextDate = nextOccurrence(t.dueDate, t.recurrence);

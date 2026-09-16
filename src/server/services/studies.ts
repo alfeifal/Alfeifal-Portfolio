@@ -7,6 +7,7 @@ import { dateSchema } from "./tasks";
 import { todayKey } from "@/lib/dates";
 import { recordGermanEvent } from "./german";
 import { emitDomainEvent } from "@/server/events/bus";
+import { assertOwned } from "@/server/ownership";
 
 /** Slug of the bootstrapped German subject: study activity for it is owned by the German bridge (see logStudySession). */
 export const GERMAN_SUBJECT_SLUG = "german";
@@ -51,7 +52,9 @@ export async function deleteSubject(userId: string, id: string) {
   await db.delete(subjects).where(and(eq(subjects.id, id), eq(subjects.userId, userId)));
 }
 export async function resolveSubject(userId: string, ref: { subjectId?: string | null; subject?: string | null; slug?: string }) {
-  if (ref.subjectId) return ref.subjectId;
+  // An id supplied by the caller is a claim, not a fact: check it belongs to this account before it
+  // becomes a foreign key. The name and slug branches below already search inside the account.
+  if (ref.subjectId) { await assertOwned(userId, { subject: ref.subjectId }); return ref.subjectId; }
   if (ref.slug) {
     const [s] = await db.select({ id: subjects.id }).from(subjects).where(and(eq(subjects.userId, userId), eq(subjects.slug, ref.slug))).limit(1);
     if (s) return s.id;
@@ -146,10 +149,12 @@ export async function listAssignments(userId: string, onlyOpen = true) {
   return db.select({ a: assignments, subjectName: subjects.name }).from(assignments).leftJoin(subjects, eq(subjects.id, assignments.subjectId)).where(and(...conds)).orderBy(asc(assignments.dueDate)).then((r) => r.map((x) => ({ ...x.a, subjectName: x.subjectName })));
 }
 export async function createAssignment(userId: string, input: z.infer<typeof assignmentSchema>) {
+  await assertOwned(userId, { subject: input.subjectId });
   const [a] = await db.insert(assignments).values({ ...input, userId }).returning();
   return a;
 }
 export async function updateAssignment(userId: string, id: string, input: Partial<z.infer<typeof assignmentSchema>> & { completed?: boolean }) {
+  await assertOwned(userId, { subject: input.subjectId });
   const { completed, ...rest } = input;
   const [a] = await db.update(assignments).set({ ...rest, ...(completed !== undefined ? { completedAt: completed ? new Date() : null } : {}) }).where(and(eq(assignments.id, id), eq(assignments.userId, userId))).returning();
   if (!a) throw notFound("Assignment");
@@ -164,10 +169,12 @@ export async function listExams(userId: string, upcomingOnly = false, tz?: strin
   return db.select({ e: exams, subjectName: subjects.name }).from(exams).leftJoin(subjects, eq(subjects.id, exams.subjectId)).where(and(...conds)).orderBy(asc(exams.date)).then((r) => r.map((x) => ({ ...x.e, subjectName: x.subjectName })));
 }
 export async function createExam(userId: string, input: z.infer<typeof examSchema>) {
+  await assertOwned(userId, { subject: input.subjectId });
   const [e] = await db.insert(exams).values({ ...input, userId }).returning();
   return e;
 }
 export async function updateExam(userId: string, id: string, input: Partial<z.infer<typeof examSchema>>) {
+  await assertOwned(userId, { subject: input.subjectId });
   const [e] = await db.update(exams).set(input).where(and(eq(exams.id, id), eq(exams.userId, userId))).returning();
   if (!e) throw notFound("Exam");
   return e;

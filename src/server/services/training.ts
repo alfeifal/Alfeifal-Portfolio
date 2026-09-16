@@ -8,6 +8,7 @@ import { addDaysKey, dateKey, daysBetween, todayKey, weekRange } from "@/lib/dat
 import { round2 } from "@/lib/money";
 import { dateSchema } from "./tasks";
 import { emitDomainEvent } from "@/server/events/bus";
+import { assertOwned } from "@/server/ownership";
 
 // ---------- Seeding the attached routine (idempotent) ----------
 export async function seedRoutine(userId: string, startDate?: string) {
@@ -191,6 +192,7 @@ export async function createExercise(userId: string, input: z.infer<typeof exerc
 // ---------- Sessions & sets ----------
 export const sessionStartSchema = z.object({ date: dateSchema.optional(), dayId: z.string().uuid().nullish(), bodyweightKg: z.number().positive().nullish(), notes: z.string().max(2000).nullish(), source: z.enum(["user", "ai"]).default("user") });
 export async function startSession(userId: string, input: z.infer<typeof sessionStartSchema>, tz?: string) {
+  await assertOwned(userId, { trainingDay: input.dayId });
   const date = input.date ?? todayKey(tz);
   const existing = (await db.select().from(workoutSessions).where(and(eq(workoutSessions.userId, userId), eq(workoutSessions.date, date), sql`${workoutSessions.finishedAt} is null`)).limit(1))[0];
   if (existing) return existing;
@@ -203,7 +205,7 @@ export async function startSession(userId: string, input: z.infer<typeof session
       const [d] = await db.select().from(trainingDays).where(and(eq(trainingDays.planId, plan.id), eq(trainingDays.dayIndex, idx)));
       if (d && !d.isRest) { dayId = d.id; dayName = d.name; }
     } else {
-      const [d] = await db.select().from(trainingDays).where(eq(trainingDays.id, dayId));
+      const [d] = await db.select().from(trainingDays).where(and(eq(trainingDays.id, dayId), eq(trainingDays.userId, userId)));
       dayName = d?.name ?? null;
     }
   }
@@ -249,6 +251,7 @@ export const setSchema = z.object({
   source: z.enum(["user", "ai"]).default("user"),
 });
 export async function logSet(userId: string, input: z.infer<typeof setSchema>, tz?: string) {
+  await assertOwned(userId, { exercise: input.exerciseId });
   let exerciseId = input.exerciseId;
   if (!exerciseId) {
     if (!input.exercise) throw badRequest("exerciseId or exercise name is required");
@@ -312,8 +315,8 @@ export async function workoutHistory(userId: string, opts: { limit?: number; fro
   const rows = await db
     .select({
       s: workoutSessions,
-      sets: sql<number>`(select count(*) from workout_sets ws where ws.session_id = workout_sessions.id and not ws.is_warmup)`,
-      volume: sql<number>`(select coalesce(sum(coalesce(ws.weight_kg,0) * coalesce(ws.reps,0)),0) from workout_sets ws where ws.session_id = workout_sessions.id and not ws.is_warmup)`,
+      sets: sql<number>`(select count(*) from workout_sets ws where ws.session_id = workout_sessions.id and ws.user_id = workout_sessions.user_id and not ws.is_warmup)`,
+      volume: sql<number>`(select coalesce(sum(coalesce(ws.weight_kg,0) * coalesce(ws.reps,0)),0) from workout_sets ws where ws.session_id = workout_sessions.id and ws.user_id = workout_sessions.user_id and not ws.is_warmup)`,
       exercisesDone: sql<number>`(select count(distinct ws.exercise_id) from workout_sets ws where ws.session_id = workout_sessions.id)`,
     })
     .from(workoutSessions)
@@ -468,8 +471,8 @@ export async function trainingStats(userId: string, range: { from: string; to: s
       date: workoutSessions.date,
       minutes: workoutSessions.durationMinutes,
       // Explicit table qualification: Drizzle leaves single-table columns unqualified, which would resolve "id" to workout_sets inside the correlated subquery.
-      sets: sql<number>`(select count(*) from workout_sets ws where ws.session_id = workout_sessions.id and not ws.is_warmup)`.as("sets"),
-      volume: sql<number>`(select coalesce(sum(coalesce(ws.weight_kg,0) * coalesce(ws.reps,0)),0) from workout_sets ws where ws.session_id = workout_sessions.id and not ws.is_warmup)`.as("volume"),
+      sets: sql<number>`(select count(*) from workout_sets ws where ws.session_id = workout_sessions.id and ws.user_id = workout_sessions.user_id and not ws.is_warmup)`.as("sets"),
+      volume: sql<number>`(select coalesce(sum(coalesce(ws.weight_kg,0) * coalesce(ws.reps,0)),0) from workout_sets ws where ws.session_id = workout_sessions.id and ws.user_id = workout_sessions.user_id and not ws.is_warmup)`.as("volume"),
     })
     .from(workoutSessions)
     .where(and(eq(workoutSessions.userId, userId), gte(workoutSessions.date, range.from), lte(workoutSessions.date, range.to)))

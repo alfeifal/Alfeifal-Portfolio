@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { Bell, ChevronsLeft, ChevronsRight, Menu, Search, Zap, LogOut } from "lucide-react";
 import { AnimatePresence, m } from "motion/react";
-import { NAV, MOBILE_TABS } from "@/components/nav";
+import { NAV, MOBILE_TABS, navFor } from "@/components/nav";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/client";
 import { MotionProvider, PageTransition, T } from "@/components/motion";
@@ -21,8 +21,8 @@ import { Tooltip } from "@/components/ui";
 const QuickEntry = dynamic(() => import("./QuickEntry").then((mod) => mod.QuickEntry), { ssr: false });
 const CommandPalette = dynamic(() => import("./CommandPalette").then((mod) => mod.CommandPalette), { ssr: false });
 
-interface ShellUser { name: string; email: string; currency: string }
-const ShellCtx = createContext<{ user: ShellUser; aiConfigured: boolean; unread: number; refreshUnread: () => void; openQuick: () => void; openPalette: () => void }>({ user: { name: "", email: "", currency: "EUR" }, aiConfigured: false, unread: 0, refreshUnread: () => {}, openQuick: () => {}, openPalette: () => {} });
+interface ShellUser { name: string; email: string; currency: string; role: string }
+const ShellCtx = createContext<{ user: ShellUser; aiConfigured: boolean; unread: number; refreshUnread: () => void; openQuick: () => void; openPalette: () => void }>({ user: { name: "", email: "", currency: "EUR", role: "user" }, aiConfigured: false, unread: 0, refreshUnread: () => {}, openQuick: () => {}, openPalette: () => {} });
 export const useShell = () => useContext(ShellCtx);
 
 const groups: { key: (typeof NAV)[number]["group"]; label: string }[] = [{ key: "core", label: "" }, { key: "money", label: "Money" }, { key: "life", label: "Life" }, { key: "learn", label: "Learning" }, { key: "system", label: "System" }];
@@ -30,6 +30,7 @@ const groups: { key: (typeof NAV)[number]["group"]; label: string }[] = [{ key: 
 export function Shell({ user, aiConfigured, children }: { user: ShellUser; aiConfigured: boolean; children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const nav = navFor(user.role);
   const [menu, setMenu] = useState(false);
   const [quick, setQuick] = useState(false);
   const [palette, setPalette] = useState(false);
@@ -85,7 +86,7 @@ export function Shell({ user, aiConfigured, children }: { user: ShellUser; aiCon
           <div key={g.key}>
             {g.label && !compact && <p className="mb-1 px-2.5 text-[10.5px] font-medium uppercase tracking-wider muted">{g.label}</p>}
             {g.label && compact && <div className="mx-2 my-2 border-t border-border" />}
-            <div className="space-y-0.5">{NAV.filter((n) => n.group === g.key).map((n) => <NavItem key={n.href} n={n} compact={compact} />)}</div>
+            <div className="space-y-0.5">{nav.filter((n) => n.group === g.key).map((n) => <NavItem key={n.href} n={n} compact={compact} />)}</div>
           </div>
         ))}
       </div>

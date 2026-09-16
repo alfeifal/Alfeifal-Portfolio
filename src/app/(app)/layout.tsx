@@ -6,5 +6,5 @@ import { aiConfigured } from "@/server/ai/client";
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  return <Shell user={{ name: user.name, email: user.email, currency: user.currency }} aiConfigured={aiConfigured()}>{children}</Shell>;
+  return <Shell user={{ name: user.name, email: user.email, currency: user.currency, role: user.role }} aiConfigured={aiConfigured()}>{children}</Shell>;
 }

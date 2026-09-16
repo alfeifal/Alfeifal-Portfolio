@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/server/db";
 import { events } from "@/server/db/schema";
 import { badRequest, notFound } from "@/server/http";
+import { assertOwned } from "@/server/ownership";
 
 export const eventKindSchema = z.enum(["event", "work", "training", "study", "german", "personal", "deadline", "reminder", "meal", "market"]);
 export const eventCreateSchema = z
@@ -57,12 +58,14 @@ export async function getEvent(userId: string, id: string) {
 
 export async function createEvent(userId: string, input: z.infer<typeof eventCreateSchema>) {
   if (input.endAt < input.startAt) throw badRequest("End must be after start");
+  await assertOwned(userId, { task: input.taskId, project: input.projectId, goal: input.goalId });
   const [e] = await db.insert(events).values({ ...input, userId }).returning();
   return e;
 }
 
 export async function updateEvent(userId: string, id: string, input: z.infer<typeof eventUpdateSchema>) {
   const current = await getEvent(userId, id);
+  await assertOwned(userId, { task: input.taskId, project: input.projectId, goal: input.goalId });
   const startAt = input.startAt ?? current.startAt;
   const endAt = input.endAt ?? (input.startAt ? new Date(input.startAt.getTime() + (current.endAt.getTime() - current.startAt.getTime())) : current.endAt);
   if (endAt < startAt) throw badRequest("End must be after start");

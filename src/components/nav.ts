@@ -1,6 +1,13 @@
-import { Home, Sparkles, CalendarDays, CheckSquare, Wallet, TrendingUp, CandlestickChart, Newspaper, Dumbbell, Apple, GraduationCap, Languages, Target, FolderKanban, BookOpen, BarChart3, Bell, Settings, type LucideIcon, ClipboardList, FileText, Search as SearchIcon } from "lucide-react";
+import { Home, Sparkles, CalendarDays, CheckSquare, Wallet, TrendingUp, CandlestickChart, Newspaper, Dumbbell, Apple, GraduationCap, Languages, Target, FolderKanban, BookOpen, BarChart3, Bell, Settings, ShieldCheck, type LucideIcon, ClipboardList, FileText, Search as SearchIcon } from "lucide-react";
 
-export interface NavItem { href: string; label: string; icon: LucideIcon; group: "core" | "life" | "money" | "learn" | "system" }
+export interface NavItem {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  group: "core" | "life" | "money" | "learn" | "system";
+  /** Shown only to administrators. The route guards itself on the server too — this only hides the link. */
+  adminOnly?: boolean;
+}
 
 /** Module registry for navigation (spec §5). Adding a module = one line here + a route. */
 export const NAV: NavItem[] = [
@@ -25,5 +32,12 @@ export const NAV: NavItem[] = [
   { href: "/reviews", label: "Reviews", icon: FileText, group: "system" },
   { href: "/notifications", label: "Notifications", icon: Bell, group: "system" },
   { href: "/settings", label: "Settings", icon: Settings, group: "system" },
+  { href: "/admin", label: "Administration", icon: ShieldCheck, group: "system", adminOnly: true },
 ];
+
+/**
+ * The entries a role may see. Hiding a link is a courtesy, not a control: `/admin` and every
+ * `/api/admin` route check the role on the server, so a hand-typed URL gets nowhere.
+ */
+export const navFor = (role: string | undefined) => NAV.filter((n) => !n.adminOnly || role === "admin");
 export const MOBILE_TABS = ["/", "/assistant", "/calendar", "/tasks"];

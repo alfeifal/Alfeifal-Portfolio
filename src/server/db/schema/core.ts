@@ -1,11 +1,25 @@
 import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
+/**
+ * Two roles, and they are about *administration*, not about data.
+ *
+ * `admin` may manage accounts under /admin. It grants no access whatsoever to another user's
+ * finance, training, journal, memory or anything else: every user-scoped query is still filtered by
+ * the session's own user id. Support access / impersonation is deliberately not implemented.
+ */
+export const userRoleEnum = pgEnum("user_role", ["admin", "user"]);
+
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull().unique(),
   name: text("name").notNull(),
   passwordHash: text("password_hash").notNull(),
+  role: userRoleEnum("role").notNull().default("user"),
+  /** A deactivated account keeps all its data but cannot log in, and its live sessions stop resolving. */
+  isActive: boolean("is_active").notNull().default(true),
+  deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   timezone: text("timezone").notNull().default("Europe/Madrid"),
   currency: text("currency").notNull().default("EUR"),
   locale: text("locale").notNull().default("es-ES"),

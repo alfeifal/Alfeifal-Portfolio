@@ -8,6 +8,7 @@ import { audit } from "@/server/audit";
 import { isoWeekKey, todayKey } from "@/lib/dates";
 import { createEvent, eventCreateSchema, eventKindSchema } from "./calendar";
 import { createTask, dateSchema, prioritySchema, taskCreateSchema } from "./tasks";
+import { assertOwned, assertAllOwned } from "@/server/ownership";
 
 /**
  * Persistent planner (phase 3.2b).
@@ -115,6 +116,10 @@ export async function createDraft(user: SessionUser, input: PlanDraftInput, opts
     .insert(plans)
     .values({ userId: user.id, horizon, periodKey, status: "draft", title: input.title ?? null, content: input.content, data: input.data ?? null, conversationId: opts.conversationId ?? null, source: input.source })
     .returning();
+  // Items can name a project or a goal. They arrive from the assistant, so they are treated exactly
+  // like anything else that comes from outside: a reference to somebody else's row is rejected.
+  await assertAllOwned(user.id, "project", input.items.map((i) => i.projectId).filter((v): v is string => !!v));
+  await assertAllOwned(user.id, "goal", input.items.map((i) => i.goalId).filter((v): v is string => !!v));
   const rows = input.items.map((i, position) => ({
     userId: user.id, planId: plan.id, position, kind: i.kind, status: "proposed" as const,
     title: i.title, notes: i.notes ?? null, date: i.date ?? null,

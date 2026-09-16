@@ -23,7 +23,7 @@ export async function buildSystemPrompt(user: SessionUser, extra?: string, secti
     listMemory(user.id, { limit: 60 }),
     lifeSnapshot(user, { sections, horizonDays: CONTEXT_HORIZON_DAYS, tz }),
   ]);
-  touchMemories(memory.map((m) => m.id)).catch(() => {});
+  touchMemories(user.id, memory.map((m) => m.id)).catch(() => {});
   const snap = fitToBudget(renderCompact(snapshot), SNAPSHOT_BUDGET_CHARS);
   const lines = [
     `You are the AI core of "${process.env.APP_NAME ?? "Personal OS"}", the private Personal Operating System of ${user.name} (${user.email}).`,

@@ -7,6 +7,7 @@ import { dateSchema } from "./tasks";
 import { round2 } from "@/lib/money";
 import { fetchQuotes, type AssetClass } from "@/server/market";
 import { todayKey } from "@/lib/dates";
+import { assertOwned } from "@/server/ownership";
 
 export const invAccountSchema = z.object({ name: z.string().min(1).max(100), broker: z.string().max(100).nullish(), currency: z.string().length(3).default("EUR"), cashBalance: z.number().default(0) });
 export const invAssetSchema = z.object({
@@ -71,6 +72,7 @@ export async function createInvestmentTransaction(userId: string, input: z.infer
   const [acct] = await db.select().from(investmentAccounts).where(and(eq(investmentAccounts.id, input.accountId), eq(investmentAccounts.userId, userId)));
   if (!acct) throw notFound("Investment account");
   if ((input.type === "buy" || input.type === "sell") && (!input.assetId || !input.quantity || !input.price)) throw badRequest("Buy/sell need assetId, quantity and price");
+  await assertOwned(userId, { investmentAsset: input.assetId });
   const amount = input.amount ?? (input.quantity && input.price ? round2(input.quantity * input.price) : 0);
   const [t] = await db.insert(investmentTransactions).values({ ...input, userId, amount, date: input.date ?? todayKey(tz) }).returning();
   // cash movement

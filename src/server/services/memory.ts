@@ -1,4 +1,4 @@
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/server/db";
 import { aiMemory } from "@/server/db/schema";
@@ -86,7 +86,7 @@ export async function rememberMemory(userId: string, input: z.infer<typeof memor
   if (input.key) {
     const existing = await findMemoryByKey(userId, input.key);
     if (existing) {
-      const [m] = await db.update(aiMemory).set({ ...input, updatedAt: new Date() }).where(eq(aiMemory.id, existing.id)).returning();
+      const [m] = await db.update(aiMemory).set({ ...input, updatedAt: new Date() }).where(and(eq(aiMemory.id, existing.id), eq(aiMemory.userId, userId))).returning();
       return m;
     }
   }
@@ -108,7 +108,7 @@ export async function forgetMemory(userId: string, ref: string | { id?: string |
   await db.delete(aiMemory).where(and(eq(aiMemory.id, id), eq(aiMemory.userId, userId)));
   return { deleted: id };
 }
-export async function touchMemories(ids: string[]) {
+export async function touchMemories(userId: string, ids: string[]) {
   if (!ids.length) return;
-  await db.update(aiMemory).set({ lastUsedAt: new Date() }).where(sql`${aiMemory.id} in ${ids}`);
+  await db.update(aiMemory).set({ lastUsedAt: new Date() }).where(and(eq(aiMemory.userId, userId), inArray(aiMemory.id, ids)));
 }

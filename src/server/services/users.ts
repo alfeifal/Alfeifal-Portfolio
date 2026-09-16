@@ -26,12 +26,23 @@ export async function signupAllowed() {
 
 export async function createUser(input: z.infer<typeof signupSchema>) {
   if (!(await signupAllowed())) throw new AppError(403, "Sign-up is disabled on this private instance");
+  // The very first account on a fresh instance owns it: it is the administrator. Every later account
+  // is a plain user, and only an administrator can create one (see services/admin.ts).
+  const role = (await userCount()) === 0 ? "admin" : "user";
+  return insertUser({ ...input, role });
+}
+
+/**
+ * The single place a row lands in `users`. Both sign-up and admin-created accounts go through it, so
+ * the password is always hashed with the same function and the email uniqueness check is never skipped.
+ */
+export async function insertUser(input: z.infer<typeof signupSchema> & { role?: "admin" | "user" }) {
   const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, input.email)).limit(1);
   if (existing.length) throw new AppError(409, "An account with this email already exists");
   const passwordHash = await hashPassword(input.password);
   const [u] = await db
     .insert(users)
-    .values({ email: input.email, name: input.name, passwordHash, timezone: input.timezone ?? process.env.DEFAULT_TIMEZONE ?? "Europe/Madrid", currency: input.currency ?? process.env.DEFAULT_CURRENCY ?? "EUR" })
+    .values({ email: input.email, name: input.name, passwordHash, role: input.role ?? "user", timezone: input.timezone ?? process.env.DEFAULT_TIMEZONE ?? "Europe/Madrid", currency: input.currency ?? process.env.DEFAULT_CURRENCY ?? "EUR" })
     .returning();
   return u;
 }
@@ -41,7 +52,15 @@ export async function authenticate(input: z.infer<typeof loginSchema>) {
   // Always run the hash to avoid timing leaks on unknown emails.
   const ok = await verifyPassword(input.password, u?.passwordHash ?? "scrypt$131072$8$1$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
   if (!u || !ok) throw new AppError(401, "Invalid email or password");
+  // Only *after* the password is proven: telling a stranger that an address exists but is disabled
+  // would hand them an account enumeration oracle.
+  if (!u.isActive) throw new AppError(403, "This account has been deactivated. Contact the administrator.");
   return u;
+}
+
+/** Stamped on a successful login so the admin list can show real last-access data. */
+export async function recordLogin(userId: string) {
+  await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, userId));
 }
 
 export const profileSchema = z.object({

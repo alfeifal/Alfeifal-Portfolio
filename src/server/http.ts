@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z, type ZodType } from "zod";
-import { getCurrentUser, type SessionUser } from "@/server/auth/session";
+import { getCurrentUser, isAdmin, type SessionUser } from "@/server/auth/session";
 import { rateLimit, LIMITS } from "@/server/security/rate-limit";
 
 export class AppError extends Error {
@@ -42,6 +42,20 @@ export function withAuth<P = Record<string, string>>(handler: Handler<P>, opts: 
       return errorResponse(e);
     }
   };
+}
+
+/**
+ * Same as `withAuth`, plus the role check — on the server, from the database row the session resolves
+ * to. Nothing the client sends (a header, a body field, local storage) can reach this decision.
+ *
+ * Being an administrator unlocks account management and nothing else: an admin route must never read
+ * or write another user's module data.
+ */
+export function withAdmin<P = Record<string, string>>(handler: Handler<P>, opts: { limit?: keyof typeof LIMITS } = {}) {
+  return withAuth<P>(async (req, ctx) => {
+    if (!isAdmin(ctx.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return handler(req, ctx);
+  }, opts);
 }
 
 export async function parseBody<T extends ZodType>(req: Request, schema: T): Promise<z.output<T>> {

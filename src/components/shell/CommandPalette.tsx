@@ -3,8 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, m } from "motion/react";
 import { ArrowRight, CornerDownLeft, Plus, Sparkles, Search as SearchIcon } from "lucide-react";
-import { NAV } from "@/components/nav";
+import { navFor } from "@/components/nav";
 import { api } from "@/lib/client";
+import { useShell } from "./Shell";
 import { cn } from "@/lib/utils";
 import { T } from "@/components/motion";
 
@@ -15,6 +16,8 @@ interface Cmd { id: string; label: string; hint?: string; group: "Go to" | "Crea
 /** Global command palette (spec §21/§22): navigation, quick actions, AI questions and search results in one panel. */
 export function CommandPalette({ open, onClose, onQuick }: { open: boolean; onClose: () => void; onQuick: () => void }) {
   const router = useRouter();
+  const { user } = useShell();
+  const role = user.role;
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [busy, setBusy] = useState(false);
@@ -40,7 +43,7 @@ export function CommandPalette({ open, onClose, onQuick }: { open: boolean; onCl
   const go = (href: string) => { onClose(); if (href.startsWith("http")) window.open(href, "_blank"); else router.push(href); };
   const ask = (text: string) => go(`/assistant?q=${encodeURIComponent(text)}`);
   const commands = useMemo<Cmd[]>(() => {
-    const nav: Cmd[] = NAV.map((n) => ({ id: "go:" + n.href, label: n.label, hint: n.href, group: "Go to", icon: <n.icon size={15} strokeWidth={1.8} />, run: () => go(n.href), keywords: "open go navigate " + n.label.toLowerCase() }));
+    const nav: Cmd[] = navFor(role).map((n) => ({ id: "go:" + n.href, label: n.label, hint: n.href, group: "Go to", icon: <n.icon size={15} strokeWidth={1.8} />, run: () => go(n.href), keywords: "open go navigate " + n.label.toLowerCase() }));
     const create: Cmd[] = [
       { id: "c:expense", label: "Add expense", group: "Create", icon: <Plus size={15} />, run: () => go("/finance?new=tx"), keywords: "spent money" },
       { id: "c:task", label: "Create task", group: "Create", icon: <Plus size={15} />, run: () => go("/tasks?new=1"), keywords: "todo remind" },
@@ -52,7 +55,7 @@ export function CommandPalette({ open, onClose, onQuick }: { open: boolean; onCl
     ];
     const askCmds: Cmd[] = ["What should I do today?", "Review my finances this month", "Plan tomorrow", "What do I train today?", "How is my German going?", "Summarize my week"].map((t) => ({ id: "ask:" + t, label: t, group: "Ask AI", icon: <Sparkles size={15} />, run: () => ask(t), keywords: "ai ask assistant" }));
     return [...create, ...askCmds, ...nav];
-  }, [onQuick]);
+  }, [onQuick, role]);
   const nq = q.trim().toLowerCase();
   const filtered = useMemo(() => {
     const local = nq ? commands.filter((c) => (c.label + " " + (c.keywords ?? "") + " " + (c.hint ?? "")).toLowerCase().includes(nq)) : commands;

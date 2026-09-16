@@ -4,6 +4,7 @@ import { db } from "@/server/db";
 import { priceAlerts, strategies, trades, tradingAccounts, watchlistItems, watchlists } from "@/server/db/schema";
 import { badRequest, notFound } from "@/server/http";
 import { round2 } from "@/lib/money";
+import { assertOwned } from "@/server/ownership";
 
 export const tradingAccountSchema = z.object({ name: z.string().min(1).max(100), mode: z.enum(["real", "paper"]), broker: z.string().max(100).nullish(), currency: z.string().length(3).default("EUR"), startingBalance: z.number().min(0).default(0), riskPerTradePct: z.number().min(0).max(100).default(1) });
 export const strategySchema = z.object({ name: z.string().min(1).max(100), description: z.string().max(5000).nullish(), rules: z.string().max(10000).nullish(), timeframes: z.string().max(100).nullish() });
@@ -59,7 +60,7 @@ export async function deleteStrategy(userId: string, id: string) {
   await db.update(strategies).set({ archived: true }).where(and(eq(strategies.id, id), eq(strategies.userId, userId)));
 }
 async function resolveStrategy(userId: string, ref: { strategyId?: string | null; strategy?: string | null }) {
-  if (ref.strategyId) return ref.strategyId;
+  if (ref.strategyId) { await assertOwned(userId, { strategy: ref.strategyId }); return ref.strategyId; }
   if (!ref.strategy) return null;
   const [s] = await db.select({ id: strategies.id }).from(strategies).where(and(eq(strategies.userId, userId), sql`lower(${strategies.name}) = lower(${ref.strategy})`)).limit(1);
   if (s) return s.id;
@@ -176,12 +177,15 @@ export async function listWatchlists(userId: string) {
 }
 export const watchlistItemSchema = z.object({ watchlistId: z.string().uuid().optional(), symbol: z.string().min(1).max(20).transform((s) => s.toUpperCase()), name: z.string().max(100).nullish(), assetClass: z.enum(["stock", "etf", "crypto", "forex", "commodity", "index", "other"]).default("stock"), notes: z.string().max(2000).nullish() });
 export async function addWatchlistItem(userId: string, input: z.infer<typeof watchlistItemSchema>) {
+  // Without this check a caller could pass someone else's watchlist id: the duplicate lookup below
+  // would then find *their* row and hand it back, symbol and notes included.
+  await assertOwned(userId, { watchlist: input.watchlistId });
   let watchlistId = input.watchlistId;
   if (!watchlistId) {
     const [w] = await db.select().from(watchlists).where(eq(watchlists.userId, userId)).orderBy(desc(watchlists.isDefault)).limit(1);
     watchlistId = w ? w.id : (await db.insert(watchlists).values({ userId, name: "Watchlist", isDefault: true }).returning())[0].id;
   }
-  const [dup] = await db.select().from(watchlistItems).where(and(eq(watchlistItems.watchlistId, watchlistId), eq(watchlistItems.symbol, input.symbol)));
+  const [dup] = await db.select().from(watchlistItems).where(and(eq(watchlistItems.watchlistId, watchlistId), eq(watchlistItems.userId, userId), eq(watchlistItems.symbol, input.symbol)));
   if (dup) return dup;
   const [i] = await db.insert(watchlistItems).values({ ...input, watchlistId, userId }).returning();
   return i;
