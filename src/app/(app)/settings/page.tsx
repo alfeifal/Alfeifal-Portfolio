@@ -10,6 +10,7 @@ import { useTheme } from "@/components/theme";
 interface Me { id: string; email: string; name: string; timezone: string; currency: string; locale: string; preferences: Record<string, unknown>; aiConfigured: boolean; marketProviders: Record<string, boolean> }
 interface Memory { id: string; kind: string; key: string | null; content: string; importance: number; pinned: boolean; source: string; updatedAt: string }
 interface ActionLog { id: string; tool: string; risk: string; status: string; summary: string | null; error: string | null; createdAt: string }
+interface AuditEntry { id: string; actor: "user" | "ai" | "system"; action: string; entityType: string | null; entityId: string | null; ip: string | null; createdAt: string }
 const WIDGETS = ["today", "finance", "goals", "projects", "training", "studies", "investing", "trading", "news"];
 
 export default function SettingsPage() {
@@ -18,6 +19,7 @@ export default function SettingsPage() {
   const me = useApi<Me>("/api/me");
   const memory = useApi<Memory[]>("/api/ai/memory");
   const actions = useApi<ActionLog[]>("/api/ai/actions?limit=50");
+  const audit = useApi<AuditEntry[]>("/api/me/audit");
   const { theme, setTheme } = useTheme();
   const [profile, setProfile] = useState({ name: "", timezone: "", currency: "" });
   const [pw, setPw] = useState({ currentPassword: "", newPassword: "" });
@@ -79,6 +81,27 @@ export default function SettingsPage() {
       <Card title="AI action log" action={<Link href="/assistant" className="btn-ghost btn-sm">Assistant</Link>}>
         {!actions.data?.length ? <p className="text-sm muted">No AI actions yet.</p> : <ul className="divide-y divide-border text-xs">{actions.data.map((a) => <li key={a.id} className="flex items-center gap-2 py-1.5"><span className="w-28 shrink-0 muted">{fmtDate(a.createdAt, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span><Badge tone={a.status === "failed" ? "negative" : a.status === "pending_confirmation" ? "warning" : "positive"}>{a.status.replace("_", " ")}</Badge><code className="shrink-0">{a.tool}</code><span className="min-w-0 flex-1 truncate muted">{a.summary ?? a.error ?? ""}</span><span className="muted">{a.risk}</span></li>)}</ul>}
       </Card>
+      <Card title="Account activity" action={<span className="text-xs muted">Every change on this account, and who made it</span>}>
+        {audit.error ? (
+          <ErrorBox error={audit.error} retry={audit.reload} />
+        ) : !audit.data ? (
+          <Spinner />
+        ) : audit.data.length === 0 ? (
+          <p className="text-sm muted">Nothing recorded yet. Signing in, editing anything, and every action the assistant takes will appear here.</p>
+        ) : (
+          <ul className="divide-y divide-border text-xs">
+            {audit.data.slice(0, 50).map((e) => (
+              <li key={e.id} className="flex items-center gap-2 py-1.5">
+                <span className="w-28 shrink-0 muted">{fmtDate(e.createdAt, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                <Badge tone={e.actor === "ai" ? "accent" : e.actor === "system" ? "muted" : "positive"}>{e.actor}</Badge>
+                <code className="shrink-0">{e.action}</code>
+                <span className="min-w-0 flex-1 truncate muted">{e.entityType ?? ""}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="mt-2 text-xs muted">Kept for your own review. It records what changed and who changed it — never passwords, tokens or the contents of a record.</p>
+      </Card>
       <Card title="Data: export, backup, delete">
         <div className="flex flex-wrap gap-2 text-sm">
           <a className="btn-ghost btn-sm" href="/api/me/export" download>Export everything (JSON)</a>
@@ -86,7 +109,7 @@ export default function SettingsPage() {
         </div>
         <p className="mt-2 text-xs muted">Database backups: run <code>pnpm backup</code> (pg_dump) or the scheduled GitHub Action — see docs/DEPLOYMENT.md. The German course progress is included in the export.</p>
         <details className="mt-3"><summary className="cursor-pointer text-sm text-negative">Delete account and all data</summary>
-          <form className="mt-2 grid gap-2 sm:grid-cols-3" onSubmit={async (e) => { e.preventDefault(); if (!confirm("This permanently deletes everything. Continue?")) return; try { await api("/api/me/delete", { method: "POST", json: del }); window.location.assign("/login"); } catch (err) { alert((err as Error).message); } }}>
+          <form className="mt-2 grid gap-2 sm:grid-cols-3" onSubmit={async (e) => { e.preventDefault(); if (!confirm("This permanently deletes everything. Continue?")) return; try { await api("/api/me/delete", { method: "POST", json: del }); window.location.assign("/login"); } catch (err) { toast.error("Account not deleted", (err as Error).message); } }}>
             <input className="field" type="password" placeholder="Password" required value={del.password} onChange={(e) => setDel({ ...del, password: e.target.value })} />
             <input className="field" placeholder='Type "DELETE"' required value={del.confirm} onChange={(e) => setDel({ ...del, confirm: e.target.value })} />
             <button className="btn-danger btn-sm">Delete permanently</button>

@@ -52,12 +52,30 @@ export async function deleteTradingAccount(userId: string, id: string) {
 export async function listStrategies(userId: string) {
   return db.select().from(strategies).where(and(eq(strategies.userId, userId), eq(strategies.archived, false))).orderBy(asc(strategies.name));
 }
+export async function getStrategy(userId: string, id: string) {
+  const [s] = await db.select().from(strategies).where(and(eq(strategies.id, id), eq(strategies.userId, userId)));
+  if (!s) throw notFound("Strategy");
+  return s;
+}
 export async function createStrategy(userId: string, input: z.infer<typeof strategySchema>) {
   const [s] = await db.insert(strategies).values({ ...input, userId }).returning();
   return s;
 }
+export const strategyUpdateSchema = strategySchema.partial().extend({ archived: z.boolean().optional() });
+/**
+ * A strategy can be born from a trade form — typing a name there creates one — so it starts with
+ * nothing but that name. Without an edit path the rules and timeframes could never be filled in, and
+ * a typo in the name was permanent. Trades keep pointing at the same row, so renaming is safe.
+ */
+export async function updateStrategy(userId: string, id: string, input: z.infer<typeof strategyUpdateSchema>) {
+  const [s] = await db.update(strategies).set(input).where(and(eq(strategies.id, id), eq(strategies.userId, userId))).returning();
+  if (!s) throw notFound("Strategy");
+  return s;
+}
+/** Archives rather than deletes: closed trades keep naming the strategy they were taken with. */
 export async function deleteStrategy(userId: string, id: string) {
-  await db.update(strategies).set({ archived: true }).where(and(eq(strategies.id, id), eq(strategies.userId, userId)));
+  const [s] = await db.update(strategies).set({ archived: true }).where(and(eq(strategies.id, id), eq(strategies.userId, userId))).returning();
+  if (!s) throw notFound("Strategy");
 }
 async function resolveStrategy(userId: string, ref: { strategyId?: string | null; strategy?: string | null }) {
   if (ref.strategyId) { await assertOwned(userId, { strategy: ref.strategyId }); return ref.strategyId; }

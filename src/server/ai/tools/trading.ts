@@ -49,12 +49,25 @@ defineTool({
   run: (i, ctx) => tr.createStrategy(ctx.user.id, i),
 });
 defineTool({
+  name: "list_strategies", module: "trading", risk: "read",
+  description: "The user's trading strategies with their description, rules and timeframes. Use it to find a strategy's id before updating it.",
+  schema: z.object({}),
+  run: (_i, ctx) => tr.listStrategies(ctx.user.id),
+});
+defineTool({
+  name: "update_strategy", module: "trading", risk: "low",
+  description: "Edit a strategy by id: rename it, or fill in its description, rules or timeframes. Trades stay attached, so analytics keep their history.",
+  schema: z.object({ id: z.string().uuid() }).extend(tr.strategyUpdateSchema.shape),
+  summarize: (i) => `update_strategy — ${i.name ?? i.id.slice(0, 8)}`,
+  run: ({ id, ...rest }, ctx) => tr.updateStrategy(ctx.user.id, id, rest),
+});
+defineTool({
   name: "delete_strategy", module: "trading", risk: "medium",
-  description: "Delete a trading strategy. Trades tagged with it are kept. Requires confirmation.",
+  description: "Archive a trading strategy so it stops being offered. Trades tagged with it keep naming it and analytics do not change. Requires confirmation.",
   schema: z.object({ id: z.string().uuid() }),
-  needsConfirmation: (i) => `Delete strategy ${i.id.slice(0, 8)}`,
+  needsConfirmation: (i) => `Archive strategy ${i.id.slice(0, 8)}`,
   summarize: (i) => `delete_strategy — ${i.id.slice(0, 8)}`,
-  run: async (i, ctx) => { await tr.deleteStrategy(ctx.user.id, i.id); return { deleted: i.id }; },
+  run: async (i, ctx) => { await tr.deleteStrategy(ctx.user.id, i.id); return { archived: i.id }; },
 });
 defineTool({
   name: "update_watchlist_item", module: "trading", risk: "low",
