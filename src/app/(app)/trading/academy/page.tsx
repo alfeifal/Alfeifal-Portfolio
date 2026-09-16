@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useToast } from "@/components/toast";
 import { Badge, Card, Empty, ErrorBox, Field, Markdown, Modal, PageHeader, Spinner, Source } from "@/components/ui";
 import { api, useApi } from "@/lib/client";
@@ -37,6 +37,15 @@ export default function AcademyPage() {
       toast.success("Lesson generated", topic); lessons.refresh();
     } catch (e) { toast.error("Generation failed", (e as Error).message); } finally { setBusy(false); }
   };
+  // Opened straight from a search result: select the lesson in the URL once the list has arrived.
+  useEffect(() => {
+    if (!lessons.data) return;
+    const id = new URLSearchParams(window.location.search).get("lesson");
+    if (!id) return;
+    const found = lessons.data.find((l) => l.id === id);
+    if (found) setOpen(found);
+  }, [lessons.data]);
+
   const submitQuiz = async () => {
     if (!open) return;
     const correct = open.quiz.filter((q, i) => answers[i] === q.answer).length;

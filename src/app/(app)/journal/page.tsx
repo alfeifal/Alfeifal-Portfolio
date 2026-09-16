@@ -7,6 +7,7 @@ import { useToast } from "@/components/toast";
 import { Badge, Empty, ErrorBox, Field, Modal, PageHeader, Source, Button, SkeletonCards, useConfirm } from "@/components/ui";
 import { api, fmtDate, todayLocal, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
+import { useFocusParam } from "@/lib/focus";
 
 interface Entry { id: string; date: string; title: string | null; content: string; kind: string; mood: number | null; tags: string[]; source: string }
 const KINDS = ["entry", "note", "reflection", "event", "achievement", "problem", "idea"];
@@ -18,6 +19,7 @@ export default function JournalPage() {
   const { confirm, dialog } = useConfirm();
   const [saving, setSaving] = useState(false);
   const entries = useApi<Entry[]>("/api/journal?limit=200");
+  const focusProps = useFocusParam(Boolean(entries.data)); // deep link from a search result
   const [editing, setEditing] = useState<Partial<Entry> | null>(null);
   const [form, setForm] = useState({ date: todayLocal(), title: "", content: "", kind: "entry", mood: "", tags: "" });
   const [error, setError] = useState("");
@@ -34,7 +36,7 @@ export default function JournalPage() {
       {summary && <div className="card p-3 text-sm"><Badge tone="accent" className="mb-1">AI summary</Badge><p className="whitespace-pre-wrap">{summary}</p></div>}
       {entries.error && <ErrorBox error={entries.error} retry={entries.reload} />}
       {entries.loading && !entries.data ? <SkeletonCards n={3} className="md:grid-cols-1" /> : entries.data?.length === 0 ? <Empty icon={<BookOpen size={18} />} title="Your journal is empty" action={<Button variant="primary" size="sm" onClick={openNew}>Write the first entry</Button>}>Daily notes, reflections, achievements, problems and ideas — the assistant can summarize any period.</Empty> : (
-        <ul className="space-y-2"><AnimatePresence initial={false}>{entries.data?.map((e) => <m.li key={e.id} layout="position" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0 }} transition={T.enter}><button className="card card-interactive w-full p-3 text-left" onClick={() => openEdit(e)}><div className="flex items-center gap-2 text-xs muted"><span>{fmtDate(e.date, { weekday: "short", day: "numeric", month: "short", year: "numeric" })}</span><Badge>{e.kind}</Badge>{e.mood && <span>{MOODS[e.mood - 1]}</span>}{e.tags.map((t) => <span key={t}>#{t}</span>)}<Source source={e.source === "ai" ? "ai" : null} /></div>{e.title && <p className="mt-1 font-medium">{e.title}</p>}<p className="mt-0.5 whitespace-pre-wrap text-sm line-clamp-4">{e.content}</p></button></m.li>)}</AnimatePresence></ul>
+        <ul className="space-y-2"><AnimatePresence initial={false}>{entries.data?.map((e) => <m.li key={e.id} {...focusProps(e.id)} layout="position" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0 }} transition={T.enter} className={focusProps(e.id).className}><button className="card card-interactive w-full p-3 text-left" onClick={() => openEdit(e)}><div className="flex items-center gap-2 text-xs muted"><span>{fmtDate(e.date, { weekday: "short", day: "numeric", month: "short", year: "numeric" })}</span><Badge>{e.kind}</Badge>{e.mood && <span>{MOODS[e.mood - 1]}</span>}{e.tags.map((t) => <span key={t}>#{t}</span>)}<Source source={e.source === "ai" ? "ai" : null} /></div>{e.title && <p className="mt-1 font-medium">{e.title}</p>}<p className="mt-0.5 whitespace-pre-wrap text-sm line-clamp-4">{e.content}</p></button></m.li>)}</AnimatePresence></ul>
       )}
       <Modal open={!!editing} onClose={() => setEditing(null)} title={editing?.id ? "Edit entry" : "New entry"} wide>
         <form onSubmit={save} className="space-y-3">

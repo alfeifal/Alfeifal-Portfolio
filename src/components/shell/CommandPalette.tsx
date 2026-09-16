@@ -8,22 +8,33 @@ import { api } from "@/lib/client";
 import { cn } from "@/lib/utils";
 import { T } from "@/components/motion";
 
-interface Hit { type: string; id: string; title: string; subtitle?: string | null; href: string; date?: string | null }
+import type { SearchHit, SearchResponse } from "@/components/search/results";
+import { moduleMeta, typeLabel } from "@/components/search/results";
 interface Cmd { id: string; label: string; hint?: string; group: "Go to" | "Create" | "Ask AI" | "Results"; icon?: React.ReactNode; run: () => void; keywords?: string }
 
 /** Global command palette (spec §21/§22): navigation, quick actions, AI questions and search results in one panel. */
 export function CommandPalette({ open, onClose, onQuick }: { open: boolean; onClose: () => void; onQuick: () => void }) {
   const router = useRouter();
   const [q, setQ] = useState("");
-  const [hits, setHits] = useState<Hit[]>([]);
+  const [hits, setHits] = useState<SearchHit[]>([]);
   const [busy, setBusy] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const seq = useRef(0);
   const [index, setIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { if (open) { setQ(""); setHits([]); setIndex(0); setTimeout(() => inputRef.current?.focus(), 30); } }, [open]);
+  useEffect(() => { if (open) { setQ(""); setHits([]); setIndex(0); setSearchError(""); setTimeout(() => inputRef.current?.focus(), 30); } }, [open]);
+  // Debounced so a typed word is one request, and sequence-guarded so a slow reply cannot overwrite a newer one.
   useEffect(() => {
-    if (!open || q.trim().length < 2) { setHits([]); return; }
-    const t = setTimeout(() => { setBusy(true); api<Hit[]>(`/api/search?q=${encodeURIComponent(q)}`).then(setHits).catch(() => setHits([])).finally(() => setBusy(false)); }, 200);
+    if (!open || q.trim().length < 2) { setHits([]); setSearchError(""); return; }
+    const t = setTimeout(() => {
+      const id = ++seq.current;
+      setBusy(true);
+      api<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&limit=24&perEntity=3`)
+        .then((r) => { if (id === seq.current) { setHits(r.hits); setSearchError(""); } })
+        .catch((e) => { if (id === seq.current) { setHits([]); setSearchError((e as Error).message); } })
+        .finally(() => { if (id === seq.current) setBusy(false); });
+    }, 220);
     return () => clearTimeout(t);
   }, [q, open]);
   const go = (href: string) => { onClose(); if (href.startsWith("http")) window.open(href, "_blank"); else router.push(href); };
@@ -45,9 +56,13 @@ export function CommandPalette({ open, onClose, onQuick }: { open: boolean; onCl
   const nq = q.trim().toLowerCase();
   const filtered = useMemo(() => {
     const local = nq ? commands.filter((c) => (c.label + " " + (c.keywords ?? "") + " " + (c.hint ?? "")).toLowerCase().includes(nq)) : commands;
-    const results: Cmd[] = hits.map((h) => ({ id: "hit:" + h.type + h.id, label: h.title, hint: `${h.type.replace("_", " ")}${h.subtitle ? " · " + h.subtitle : ""}`, group: "Results", icon: <SearchIcon size={14} />, run: () => go(h.href) }));
+    const results: Cmd[] = hits.map((h) => {
+      const meta = moduleMeta(h.module);
+      return { id: "hit:" + h.type + h.id, label: h.title, hint: `${meta.label} · ${typeLabel(h.type)}${h.snippet ? " · " + h.snippet : ""}`, group: "Results" as const, icon: <meta.icon size={14} />, run: () => go(h.href) };
+    });
+    const seeAll: Cmd[] = nq.length >= 2 ? [{ id: "hit:all", label: `See all results for “${q.trim()}”`, group: "Results", icon: <SearchIcon size={15} />, run: () => go(`/search?q=${encodeURIComponent(q.trim())}`) }] : [];
     const askFree: Cmd[] = nq.length > 3 && !local.some((c) => c.group === "Ask AI") ? [{ id: "ask:free", label: `Ask AI: “${q.trim()}”`, group: "Ask AI", icon: <Sparkles size={15} />, run: () => ask(q.trim()) }] : [];
-    return [...results, ...local, ...askFree];
+    return [...results, ...seeAll, ...local, ...askFree];
   }, [commands, hits, nq, q]);
   useEffect(() => { setIndex(0); }, [filtered.length, nq]);
   const onKey = (e: React.KeyboardEvent) => {
@@ -72,7 +87,8 @@ export function CommandPalette({ open, onClose, onQuick }: { open: boolean; onCl
               <kbd className="rounded border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] muted">esc</kbd>
             </div>
             <div ref={listRef} className="max-h-[52vh] overflow-y-auto p-1.5">
-              {filtered.length === 0 && <p className="px-3 py-6 text-center text-sm muted">Nothing matches.</p>}
+              {searchError && <p className="px-3 py-2 text-center text-sm text-negative">Search failed: {searchError}</p>}
+              {filtered.length === 0 && !busy && <p className="px-3 py-6 text-center text-sm muted">Nothing matches.</p>}
               {groupsOrder.map((g) => { const items = filtered.filter((c) => c.group === g); if (!items.length) return null; return (
                 <div key={g} className="mb-1">
                   <p className="px-2.5 pb-1 pt-2 text-[10.5px] font-medium uppercase tracking-wider muted">{g}</p>

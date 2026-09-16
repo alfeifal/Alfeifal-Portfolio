@@ -5,6 +5,7 @@ import { Badge, Bar, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, S
 import { addDays, api, fmtDate, fmtNum, todayLocal, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 import { MiniBars } from "@/components/charts";
+import { initialMatch } from "@/lib/urlparam";
 
 interface Consistency { macroCalories: number; delta: number; tolerance: number; ok: boolean }
 interface Entry { id: string; description: string; quantity: number; unit: string; calories: number; protein: number; carbs: number; fat: number; source: string; confidence: number | null; consistency: Consistency }
@@ -18,7 +19,7 @@ export default function NutritionPage() {
   const toast = useToast();
   const { confirm, dialog } = useConfirm();
   const [saving, setSaving] = useState(false);
-  const [date, setDate] = useState(todayLocal());
+  const [date, setDate] = useState(() => initialMatch("date", /^\d{4}-\d{2}-\d{2}$/, todayLocal()));
   const day = useApi<Day>(`/api/nutrition/day?date=${date}`, [date]);
   const summary = useApi<Summary>("/api/nutrition/summary");
   const foods = useApi<Food[]>("/api/nutrition/foods");

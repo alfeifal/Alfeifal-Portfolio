@@ -62,7 +62,8 @@ function Assistant() {
     let cancelled = false;
     (async () => {
       try {
-        const pointer = readPointer();
+        // A search result can point at a specific living conversation; it wins over the stored pointer.
+        const pointer = new URLSearchParams(window.location.search).get("conversation") ?? readPointer();
         const r = await api<{ conversation: Transcript | null }>(`/api/ai/conversations/active${pointer ? `?id=${encodeURIComponent(pointer)}` : ""}`);
         if (cancelled) return;
         if (r.conversation) {

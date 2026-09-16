@@ -1,4 +1,4 @@
-import { Home, Sparkles, CalendarDays, CheckSquare, Wallet, TrendingUp, CandlestickChart, Newspaper, Dumbbell, Apple, GraduationCap, Languages, Target, FolderKanban, BookOpen, BarChart3, Bell, Settings, type LucideIcon, ClipboardList, FileText } from "lucide-react";
+import { Home, Sparkles, CalendarDays, CheckSquare, Wallet, TrendingUp, CandlestickChart, Newspaper, Dumbbell, Apple, GraduationCap, Languages, Target, FolderKanban, BookOpen, BarChart3, Bell, Settings, type LucideIcon, ClipboardList, FileText, Search as SearchIcon } from "lucide-react";
 
 export interface NavItem { href: string; label: string; icon: LucideIcon; group: "core" | "life" | "money" | "learn" | "system" }
 
@@ -20,6 +20,7 @@ export const NAV: NavItem[] = [
   { href: "/goals", label: "Goals", icon: Target, group: "life" },
   { href: "/projects", label: "Projects", icon: FolderKanban, group: "life" },
   { href: "/journal", label: "Journal", icon: BookOpen, group: "life" },
+  { href: "/search", label: "Search", icon: SearchIcon, group: "system" },
   { href: "/analytics", label: "Analytics", icon: BarChart3, group: "system" },
   { href: "/reviews", label: "Reviews", icon: FileText, group: "system" },
   { href: "/notifications", label: "Notifications", icon: Bell, group: "system" },

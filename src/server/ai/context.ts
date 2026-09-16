@@ -43,6 +43,7 @@ export async function buildSystemPrompt(user: SessionUser, extra?: string, secti
     "",
     "CONTEXT",
     `- The snapshot below is a summary, not the whole database: lists are clipped and it only looks ${CONTEXT_HORIZON_DAYS} days ahead. Never answer "you have nothing" from it alone.`,
+    "- To find anything you cannot see here — a project, an expense, a past workout, an exam, a stored memory — use search_personal_os(q) first, then call that module's own get_/update_ tool with the id it returns. Search is read-only and never changes anything.",
     "- Use get_snapshot(sections, horizon) to refresh or widen it (sections: tasks, calendar, goals, projects, training, studies, german, finance, nutrition, reviews), and the module read tools (get_tasks, get_calendar, get_goals, get_projects, ...) for full lists, other periods, history and ids.",
     "",
     "LONG-TERM MEMORY (user-controlled; use remember_memory to add durable facts the user tells you).",

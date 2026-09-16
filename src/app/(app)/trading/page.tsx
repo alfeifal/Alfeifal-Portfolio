@@ -6,6 +6,7 @@ import { Badge, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Stat, 
 import { api, fmtDate, fmtMoney, fmtNum, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 import { MiniLine } from "@/components/charts";
+import { initialParam } from "@/lib/urlparam";
 
 type Mode = "paper" | "real";
 interface Trade { id: string; symbol: string; direction: string; status: string; mode: Mode; entryPrice: number | null; exitPrice: number | null; stopLoss: number | null; target: number | null; quantity: number | null; pnl: number | null; rMultiple: number | null; riskAmount: number | null; strategyName: string | null; timeframe: string | null; openedAt: string | null; closedAt: string | null; accountName: string | null }
@@ -22,7 +23,7 @@ export default function TradingPage() {
   const [saving, setSaving] = useState(false);
   const cur = user.currency;
   const [mode, setMode] = useState<Mode>("paper");
-  const [tab, setTab] = useState<"dashboard" | "journal" | "analytics" | "watchlist" | "brief">("dashboard");
+  const [tab, setTab] = useState<"dashboard" | "journal" | "analytics" | "watchlist" | "brief">(() => initialParam("tab", ["dashboard", "journal", "analytics", "watchlist", "brief"] as const, "dashboard"));
   const stats = useApi<Stats>(`/api/trading/stats?mode=${mode}`, [mode]);
   const trades = useApi<Trade[]>(`/api/trading/trades?mode=${mode}&limit=100`, [mode]);
   const watchlists = useApi<Watchlist[]>("/api/trading/watchlist");

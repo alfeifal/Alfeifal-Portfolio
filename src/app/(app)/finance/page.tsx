@@ -8,6 +8,9 @@ import { api, fmtDate, fmtMoney, todayLocal, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 import type { Transaction } from "@/lib/types";
 import { MiniBars } from "@/components/charts";
+import { useFocusParam } from "@/lib/focus";
+import { cn } from "@/lib/utils";
+import { initialMatch, initialParam } from "@/lib/urlparam";
 
 interface Summary { range: { from: string; to: string }; income: number; expenses: number; net: number; savingsRate: number | null; byCategory: { categoryId: string | null; name: string; total: number; count: number }[]; budgets: { id: string; name: string; amount: number; spent: number; remaining: number; pct: number; categoryId: string | null }[]; accounts: { id: string; name: string; type: string; balance: number; isDefault: boolean }[]; financeBalance: number; daily: { date: string; type: string; total: number }[]; monthly: { month: string; income: number; expenses: number }[] }
 interface Category { id: string; name: string; kind: string }
@@ -23,11 +26,12 @@ export default function FinancePage() {
   const { confirm, dialog } = useConfirm();
   const [saving, setSaving] = useState(false);
   const cur = user.currency;
-  const [tab, setTab] = useState<"overview" | "transactions" | "budgets" | "accounts" | "recurring" | "savings">("overview");
-  const [month, setMonth] = useState(monthKey());
+  const [tab, setTab] = useState<"overview" | "transactions" | "budgets" | "accounts" | "recurring" | "savings">(() => initialParam("tab", ["overview", "transactions", "budgets", "accounts", "recurring", "savings"] as const, "overview"));
+  const [month, setMonth] = useState(() => initialMatch("month", /^\d{4}-\d{2}$/, monthKey()));
   const r = monthRange(month);
   const summary = useApi<Summary>(`/api/finance/summary?from=${r.from}&to=${r.to}`, [month]);
   const txs = useApi<Transaction[]>(`/api/finance/transactions?from=${r.from}&to=${r.to}&limit=500`, [month]);
+  const focusProps = useFocusParam(Boolean(txs.data)); // deep link from a search result
   const cats = useApi<Category[]>("/api/finance/categories");
   const recurring = useApi<Recurring[]>("/api/finance/recurring");
   const savings = useApi<Savings[]>("/api/finance/savings");
@@ -86,7 +90,7 @@ export default function FinancePage() {
       )}
       {tab === "transactions" && (
         txs.error ? <ErrorBox error={txs.error} retry={txs.reload} /> : txs.loading && !txs.data ? <SkeletonList rows={6} /> : !txs.data?.length ? <Empty title={`No transactions in ${month}`} action={<Button variant="primary" size="sm" onClick={() => openTx()}>Add a transaction</Button>}>Expenses, income and transfers for this month will appear here.</Empty> : (
-          <ul className="card divide-y divide-border overflow-hidden"><AnimatePresence initial={false}>{txs.data.map((t) => <m.li key={t.id} layout="position" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0 }} transition={T.enter} className="row"><button className="flex w-full items-center gap-3 px-3 py-2 text-left" onClick={() => openTx(t)}><span className="w-12 shrink-0 text-xs muted">{fmtDate(t.date)}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm">{t.description || t.merchant || t.categoryName || t.type}</span><span className="block text-xs muted">{t.categoryName ?? (t.type === "transfer" ? "transfer" : "uncategorized")}{t.accountName ? ` · ${t.accountName}` : ""} <Source source={t.source === "ai" ? "ai" : null} /></span></span><span className={"tnum text-sm font-medium " + (t.type === "income" ? "text-positive" : t.type === "expense" ? "" : "muted")}>{t.type === "income" ? "+" : t.type === "expense" ? "−" : "↔"}{fmtMoney(t.amount, t.currency)}</span></button></m.li>)}</AnimatePresence></ul>
+          <ul className="card divide-y divide-border overflow-hidden"><AnimatePresence initial={false}>{txs.data.map((t) => <m.li key={t.id} {...focusProps(t.id)} layout="position" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0 }} transition={T.enter} className={cn("row", focusProps(t.id).className)}><button className="flex w-full items-center gap-3 px-3 py-2 text-left" onClick={() => openTx(t)}><span className="w-12 shrink-0 text-xs muted">{fmtDate(t.date)}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm">{t.description || t.merchant || t.categoryName || t.type}</span><span className="block text-xs muted">{t.categoryName ?? (t.type === "transfer" ? "transfer" : "uncategorized")}{t.accountName ? ` · ${t.accountName}` : ""} <Source source={t.source === "ai" ? "ai" : null} /></span></span><span className={"tnum text-sm font-medium " + (t.type === "income" ? "text-positive" : t.type === "expense" ? "" : "muted")}>{t.type === "income" ? "+" : t.type === "expense" ? "−" : "↔"}{fmtMoney(t.amount, t.currency)}</span></button></m.li>)}</AnimatePresence></ul>
         )
       )}
       {tab === "budgets" && s && (

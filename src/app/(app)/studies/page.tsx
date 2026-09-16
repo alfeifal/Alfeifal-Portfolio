@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Badge, Bar, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Tabs, Button, SkeletonList, SkeletonCards, useConfirm } from "@/components/ui";
 import { api, fmtDate, todayLocal, useApi } from "@/lib/client";
 import { MiniBars } from "@/components/charts";
+import { initialParam } from "@/lib/urlparam";
 
 interface Subject { id: string; name: string; kind: string; slug: string | null; weeklyGoalMinutes: number | null; color: string | null }
 interface Session { id: string; date: string; durationMinutes: number; topic: string | null; subjectName: string | null; source: string }
@@ -16,7 +17,7 @@ export default function StudiesPage() {
   const toast = useToast();
   const { confirm, dialog } = useConfirm();
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"overview" | "sessions" | "deadlines" | "subjects">("overview");
+  const [tab, setTab] = useState<"overview" | "sessions" | "deadlines" | "subjects">(() => initialParam("tab", ["overview", "sessions", "deadlines", "subjects"] as const, "overview"));
   const subjects = useApi<Subject[]>("/api/studies/subjects");
   const sessions = useApi<Session[]>("/api/studies/sessions?limit=100");
   const progress = useApi<Progress>("/api/studies/progress");

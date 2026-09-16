@@ -5,6 +5,7 @@ import { Badge, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Stat, 
 import { api, fmtDate, fmtMoney, fmtNum, todayLocal, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 import { MiniLine } from "@/components/charts";
+import { initialParam } from "@/lib/urlparam";
 
 interface Portfolio { positions: { asset: { id: string; symbol: string; name: string; assetClass: string; currency: string }; quantity: number; costBasis: number; avgCost: number | null; price: number | null; priceSource: string | null; priceAt: string | null; value: number | null; unrealized: number | null; unrealizedPct: number | null; realized: number }[]; accounts: { id: string; name: string; broker: string | null; cashBalance: number }[]; cash: number; totalValue: number; totalCost: number; unrealized: number; unpriced: string[]; allocation: { symbol: string; assetClass: string; value: number; pct: number }[]; netContributions: number; history: { date: string; totalValue: number; cash: number }[] }
 interface Tx { id: string; type: string; date: string; quantity: number | null; price: number | null; amount: number; fees: number; symbol: string | null; accountName: string | null; source: string }
@@ -16,7 +17,7 @@ export default function InvestingPage() {
   const { confirm, dialog } = useConfirm();
   const [saving, setSaving] = useState(false);
   const cur = user.currency;
-  const [tab, setTab] = useState<"portfolio" | "transactions" | "assets">("portfolio");
+  const [tab, setTab] = useState<"portfolio" | "transactions" | "assets">(() => initialParam("tab", ["portfolio", "transactions", "assets"] as const, "portfolio"));
   const [refresh, setRefresh] = useState(0);
   const p = useApi<Portfolio>(`/api/investing/portfolio${refresh ? "?refresh=1" : ""}`, [refresh]);
   const txs = useApi<Tx[]>("/api/investing/transactions");

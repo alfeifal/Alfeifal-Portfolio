@@ -131,8 +131,8 @@ d("services (integration, real database)", () => {
     expect(await generateNotifications(user.id, "Europe/Madrid")).toBe(0); // idempotent
     expect((await listNotifications(user.id)).some((n) => n.title.includes("Overdue thing"))).toBe(true);
     const hits = await globalSearch(user.id, "supermarket");
-    expect(hits.some((h) => h.type === "transaction")).toBe(true);
-    expect((await globalSearch(user.id, "Akkusativ")).some((h) => h.type.startsWith("german"))).toBe(true);
+    expect(hits.hits.some((h) => h.type === "transaction")).toBe(true);
+    expect((await globalSearch(user.id, "Akkusativ")).hits.some((h) => h.type.startsWith("german"))).toBe(true);
     const dump = await exportAll(user.id);
     expect(dump.finance.transactions.length).toBeGreaterThanOrEqual(4);
     expect(dump.training.dayExercises).toHaveLength(49);

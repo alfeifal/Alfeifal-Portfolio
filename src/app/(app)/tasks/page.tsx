@@ -8,6 +8,8 @@ import { T } from "@/components/motion";
 import { useToast } from "@/components/toast";
 import { api, fmtDate, todayLocal, useApi } from "@/lib/client";
 import type { Task, Project, Goal } from "@/lib/types";
+import { useFocusParam } from "@/lib/focus";
+import { cn } from "@/lib/utils";
 
 type View = "today" | "upcoming" | "overdue" | "inbox" | "completed";
 const empty = { title: "", description: "", priority: "medium", category: "", dueDate: "", dueTime: "", projectId: "", goalId: "", recurrence: "", estimatedMinutes: "" };
@@ -25,6 +27,7 @@ function TasksInner() {
   const { confirm, dialog } = useConfirm();
   const [view, setView] = useState<View>((sp.get("view") as View) || "today");
   const tasks = useApi<Task[]>(`/api/tasks?view=${view}`, [view]);
+  const focusProps = useFocusParam(Boolean(tasks.data)); // deep link from a search result
   const projects = useApi<Project[]>("/api/projects");
   const goals = useApi<Goal[]>("/api/goals?status=active");
   const [editing, setEditing] = useState<Partial<Task> | null>(null);
@@ -59,7 +62,7 @@ function TasksInner() {
           <ul className="card divide-y divide-border overflow-hidden">
             <AnimatePresence initial={false}>
               {tasks.data.map((t) => (
-                <m.li key={t.id} layout="position" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: 24, height: 0, transition: { duration: 0.2, ease: T.exit.ease } }} transition={T.enter} className="row flex items-center gap-3 px-3 py-2.5">
+                <m.li key={t.id} {...focusProps(t.id)} layout="position" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: 24, height: 0, transition: { duration: 0.2, ease: T.exit.ease } }} transition={T.enter} className={cn("row flex items-center gap-3 px-3 py-2.5", focusProps(t.id).className)}>
                   <Checkbox checked={t.status === "done"} onChange={(v) => (v ? complete(t) : reopen(t))} label={t.status === "done" ? `Reopen ${t.title}` : `Complete ${t.title}`} />
                   <button className="min-w-0 flex-1 text-left" onClick={() => openEdit(t)}>
                     <p className={"truncate text-sm font-medium transition-all " + (t.status === "done" ? "line-through muted" : "")}>{t.title}</p>

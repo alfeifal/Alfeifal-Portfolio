@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "../registry";
 import * as mem from "@/server/services/memory";
-import { globalSearch } from "@/server/services/search";
+import { globalSearch, MAX_QUERY_LENGTH, SEARCH_MODULES } from "@/server/services/search";
 
 /**
  * A memory is addressed by `key` (the semantic slug the assistant chose, e.g. "investments_trading212")
@@ -57,4 +57,36 @@ defineTool({
   run: (i, ctx) => mem.forgetMemory(ctx.user.id, i),
 });
 
-defineTool({ name: "search_everything", module: "ai", risk: "read", description: "Keyword search across tasks, events, transactions, goals, projects, journal, studies, workouts, trades, exercises, news and German content.", schema: z.object({ q: z.string().min(2) }), run: (i, ctx) => globalSearch(ctx.user.id, i.q) });
+/**
+ * The assistant's way into the user's own data.
+ *
+ * Strictly read-only and always scoped to the caller. It takes a query string, two caps and an optional
+ * module filter from a fixed list — there is no table, column, userId, ordering or SQL parameter, so it
+ * cannot be used to reach another user's rows or to write anything. Every hit carries a safe internal
+ * reference, which is how the model then calls the module's own read/write tools (and, for a memory,
+ * both its `id` and its `key`, so it never has to guess a UUID).
+ */
+defineTool({
+  name: "search_personal_os", module: "ai", risk: "read",
+  description: [
+    "Search everything in the user's Personal OS by keyword: tasks, calendar events, journal entries, goals, projects, milestones, plan items,",
+    "transactions, accounts, categories, recurring payments, savings goals, budgets, foods, meals and logged nutrition entries, workouts, exercises,",
+    "routine days and training plans, subjects, study sessions, assignments and exams, investment accounts/assets/transactions, trades, strategies,",
+    "trading accounts, watchlist items, price alerts, academy lessons, notifications, stored memories, live AI conversations, market news and German course content.",
+    "Case- and accent-insensitive, matches partial words, and all words must match. Use it to find something that is not in your context, then call that",
+    "module's own get_/update_ tool with the id it returns. It is read-only: it can never create, change or delete anything.",
+  ].join(" "),
+  schema: z.object({
+    q: z.string().min(2).max(MAX_QUERY_LENGTH).describe("What to look for, e.g. 'Budapest', 'Velsoma', 'entrenamiento pecho'."),
+    limit: z.number().int().min(1).max(40).default(20).describe("Maximum hits to return."),
+    modules: z.array(z.enum(SEARCH_MODULES)).max(SEARCH_MODULES.length).optional().describe("Restrict to these modules. Omit to search everything."),
+  }),
+  run: async (i, ctx) => {
+    const r = await globalSearch(ctx.user.id, i.q, { limit: i.limit, modules: i.modules });
+    // Compact on purpose: the model gets what it needs to choose and to act, not whole records.
+    return {
+      query: r.query, total: r.total, truncated: r.truncated,
+      hits: r.hits.map((h) => ({ type: h.type, module: h.module, id: h.id, ...(h.key ? { key: h.key } : {}), title: h.title, snippet: h.snippet ?? undefined, date: h.date ?? undefined })),
+    };
+  },
+});
