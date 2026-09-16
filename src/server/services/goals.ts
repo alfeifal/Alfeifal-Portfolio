@@ -1,14 +1,15 @@
-import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/server/db";
 import { goals, milestones, tasks } from "@/server/db/schema";
 import { badRequest, notFound } from "@/server/http";
-import { audit } from "@/server/audit";
+import { audit, type AuditActor } from "@/server/audit";
 import { emitDomainEvent } from "@/server/events/bus";
 import type { GoalState } from "@/server/events/types";
 import { clamp } from "@/lib/utils";
 import { todayKey } from "@/lib/dates";
 import { dateSchema, prioritySchema } from "./tasks";
+import { deriveProgress } from "./progress";
 import { METRIC_KIND_VALUES, METRIC_PERIOD_VALUES, METRIC_SOURCE_VALUES, computeGoalMetric, goalPace, isLinked, normalizeMetricLink, resolveTz, type MetricSource } from "./goal-metrics";
 export { METRIC_SOURCES } from "./goal-metrics";
 
@@ -64,15 +65,16 @@ function derivedProgress(input: { progress?: number; metricTarget?: number | nul
   return input.progress;
 }
 
-export async function createGoal(userId: string, input: z.infer<typeof goalCreateSchema>, tz?: string) {
+export async function createGoal(userId: string, input: z.infer<typeof goalCreateSchema>, tz?: string, actor: AuditActor = "user") {
   const normalized = normalizeMetricLink(input);
   const progress = derivedProgress(normalized) ?? 0;
   const [g] = await db.insert(goals).values({ ...normalized, userId, progress, completedAt: input.status === "completed" ? new Date() : null }).returning();
+  await audit({ userId, actor, action: "goal.created", entityType: "goal", entityId: g.id, metadata: { name: g.name, status: g.status, linked: isLinked(g) ? g.metricSource : null } });
   if (isLinked(g)) return (await recomputeLinkedGoals(userId, { goalIds: [g.id], cause: "goal.created", tz })).byId.get(g.id) ?? g;
   return g;
 }
 
-export async function updateGoal(userId: string, id: string, input: z.infer<typeof goalUpdateSchema>, tz?: string) {
+export async function updateGoal(userId: string, id: string, input: z.infer<typeof goalUpdateSchema>, tz?: string, actor: AuditActor = "user") {
   const current = await getGoal(userId, id, tz);
   const merged = normalizeMetricLink({ ...current, ...input });
   if (merged.metricSource && (input.metricCurrent != null || input.progress != null)) {
@@ -86,6 +88,7 @@ export async function updateGoal(userId: string, id: string, input: z.infer<type
     .set({ ...input, metricSource: row.metricSource, metricKind: row.metricKind, metricRef: row.metricRef, metricPeriod: row.metricPeriod, metricUnit: row.metricUnit, metricName: row.metricName, progress, status, completedAt: status === "completed" ? current.completedAt ?? new Date() : null })
     .where(and(eq(goals.id, id), eq(goals.userId, userId)))
     .returning();
+  await audit({ userId, actor, action: "goal.updated", entityType: "goal", entityId: id, metadata: { fields: Object.keys(input), status: g.status, previousStatus: current.status } });
   if (isLinked(g) && g.status === "active") return (await recomputeLinkedGoals(userId, { goalIds: [id], cause: "goal.updated", tz })).byId.get(id) ?? g;
   return g;
 }
@@ -134,21 +137,102 @@ export async function recomputeLinkedGoals(userId: string, opts: { sources?: Met
   return { byId, changed };
 }
 
-export async function deleteGoal(userId: string, id: string) {
-  await getGoal(userId, id);
+export async function deleteGoal(userId: string, id: string, actor: AuditActor = "user") {
+  const current = await getGoal(userId, id);
   await db.delete(goals).where(and(eq(goals.id, id), eq(goals.userId, userId)));
+  await audit({ userId, actor, action: "goal.deleted", entityType: "goal", entityId: id, metadata: { name: current.name, milestones: current.milestones.length, tasks: current.tasks.length } });
+  return { deleted: id };
 }
 
-export async function addMilestone(userId: string, goalId: string, input: z.infer<typeof milestoneSchema>) {
+/**
+ * Recomputes a manual goal's progress from its own work, and persists it.
+ *
+ * A linked goal is never touched: its value belongs to the module it tracks, and overwriting it here
+ * would be exactly the "second source of progress" this phase exists to remove. For every other goal the
+ * precedence in `deriveProgress` applies, so completing a checkpoint finally moves the number that
+ * Analytics, Reviews, Search, the snapshot and the notifications all read.
+ */
+export async function recomputeGoalProgress(userId: string, goalId: string, cause: string) {
+  const [g] = await db.select().from(goals).where(and(eq(goals.id, goalId), eq(goals.userId, userId)));
+  if (!g || isLinked(g)) return g ?? null;
+  const [counts] = await db.select({
+    openTasks: sql<number>`count(*) filter (where ${tasks.status} in ('todo','in_progress'))`,
+    doneTasks: sql<number>`count(*) filter (where ${tasks.status} = 'done')`,
+  }).from(tasks).where(and(eq(tasks.userId, userId), eq(tasks.goalId, goalId)));
+  const [ms] = await db.select({
+    totalMilestones: sql<number>`count(*)`,
+    doneMilestones: sql<number>`count(*) filter (where ${milestones.completedAt} is not null)`,
+  }).from(milestones).where(and(eq(milestones.userId, userId), eq(milestones.goalId, goalId)));
+
+  const derived = deriveProgress({
+    openTasks: Number(counts?.openTasks ?? 0), doneTasks: Number(counts?.doneTasks ?? 0),
+    totalMilestones: Number(ms?.totalMilestones ?? 0), doneMilestones: Number(ms?.doneMilestones ?? 0),
+  }, g.progress);
+  // Nothing to derive from: leave whatever the user set by hand rather than resetting it to 0.
+  if (derived.basis === "manual" || derived.basis === "none") return g;
+  if (derived.progress === g.progress) return g;
+
+  // Reaching 100% completes the goal, the same rule `recomputeLinkedGoals` applies to a total-period goal.
+  const completes = derived.progress >= 100 && g.status === "active";
+  const [next] = await db.update(goals)
+    .set({ progress: derived.progress, status: completes ? "completed" : g.status, completedAt: completes ? g.completedAt ?? new Date() : g.completedAt })
+    .where(and(eq(goals.id, goalId), eq(goals.userId, userId))).returning();
+  await audit({ userId, actor: "system", action: "goal.progress_recomputed", entityType: "goal", entityId: goalId, metadata: { cause, basis: derived.basis, before: g.progress, after: derived.progress, done: derived.done, total: derived.total } });
+  const tz = await resolveTz(userId);
+  const today = todayKey(tz);
+  await emitDomainEvent(userId, { type: "goal.progress_changed", goalId, name: g.name, cause, periodKey: goalPace(next, today, tz).key, unit: g.metricUnit, target: g.metricTarget, before: goalState(g, today, tz), after: goalState(next, today, tz) }, { tz });
+  return next;
+}
+
+export async function addMilestone(userId: string, goalId: string, input: z.infer<typeof milestoneSchema>, actor: AuditActor = "user") {
   await getGoal(userId, goalId);
   const [m] = await db.insert(milestones).values({ ...input, userId, goalId }).returning();
+  await audit({ userId, actor, action: "milestone.created", entityType: "milestone", entityId: m.id, metadata: { goalId, title: m.title } });
+  await recomputeGoalProgress(userId, goalId, "milestone.created");
   return m;
 }
-export async function toggleMilestone(userId: string, id: string, done: boolean) {
+
+export const milestoneUpdateSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  dueDate: dateSchema.nullish(),
+  position: z.number().int().optional(),
+  done: z.boolean().optional(),
+});
+
+/** Edits a milestone and refreshes whatever owns it. Ownership is enforced in the WHERE clause. */
+export async function updateMilestone(userId: string, id: string, input: z.infer<typeof milestoneUpdateSchema>, actor: AuditActor = "user") {
+  const { done, ...rest } = input;
+  const patch: Record<string, unknown> = { ...rest };
+  if (done !== undefined) patch.completedAt = done ? new Date() : null;
+  const [m] = await db.update(milestones).set(patch).where(and(eq(milestones.id, id), eq(milestones.userId, userId))).returning();
+  if (!m) throw notFound("Milestone");
+  await audit({ userId, actor, action: "milestone.updated", entityType: "milestone", entityId: id, metadata: { fields: Object.keys(input), goalId: m.goalId, projectId: m.projectId } });
+  await recomputeOwners(userId, m, "milestone.updated");
+  return m;
+}
+
+export async function toggleMilestone(userId: string, id: string, done: boolean, actor: AuditActor = "user") {
   const [m] = await db.update(milestones).set({ completedAt: done ? new Date() : null }).where(and(eq(milestones.id, id), eq(milestones.userId, userId))).returning();
   if (!m) throw notFound("Milestone");
+  await audit({ userId, actor, action: done ? "milestone.completed" : "milestone.reopened", entityType: "milestone", entityId: id, metadata: { title: m.title, goalId: m.goalId, projectId: m.projectId } });
+  await recomputeOwners(userId, m, done ? "milestone.completed" : "milestone.reopened");
   return m;
 }
-export async function deleteMilestone(userId: string, id: string) {
-  await db.delete(milestones).where(and(eq(milestones.id, id), eq(milestones.userId, userId)));
+
+export async function deleteMilestone(userId: string, id: string, actor: AuditActor = "user") {
+  const [m] = await db.delete(milestones).where(and(eq(milestones.id, id), eq(milestones.userId, userId))).returning();
+  // A milestone that is not this user's simply does not exist as far as this call is concerned.
+  if (!m) throw notFound("Milestone");
+  await audit({ userId, actor, action: "milestone.deleted", entityType: "milestone", entityId: id, metadata: { title: m.title, goalId: m.goalId, projectId: m.projectId } });
+  await recomputeOwners(userId, m, "milestone.deleted");
+  return { deleted: id };
+}
+
+/** A milestone belongs to a goal, a project, or both; whichever it is gets its progress refreshed. */
+async function recomputeOwners(userId: string, m: { goalId: string | null; projectId: string | null }, cause: string) {
+  if (m.goalId) await recomputeGoalProgress(userId, m.goalId, cause);
+  if (m.projectId) {
+    const { recomputeProjectProgress } = await import("./projects");
+    await recomputeProjectProgress(userId, m.projectId, cause);
+  }
 }

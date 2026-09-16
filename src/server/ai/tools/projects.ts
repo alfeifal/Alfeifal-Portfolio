@@ -4,8 +4,8 @@ import * as p from "@/server/services/projects";
 import { createTask, dateSchema } from "@/server/services/tasks";
 
 defineTool({ name: "get_projects", module: "projects", risk: "read", description: "List projects (default active) with task counts, or one project with its tasks and milestones when id is given.", schema: z.object({ status: z.string().optional(), id: z.string().uuid().optional() }), run: (i, ctx) => (i.id ? p.getProject(ctx.user.id, i.id) : p.listProjects(ctx.user.id, i.status ?? undefined)) });
-defineTool({ name: "create_project", module: "projects", risk: "low", description: "Create a project.", schema: p.projectCreateSchema.omit({ source: true }), summarize: (i) => `create_project — ${i.name}`, run: (i, ctx) => p.createProject(ctx.user.id, { ...i, source: "ai" }) });
-defineTool({ name: "update_project", module: "projects", risk: "medium", description: "Update a project (status, priority, deadline, notes, progress).", schema: z.object({ id: z.string().uuid() }).extend(p.projectUpdateSchema.omit({ source: true }).shape), summarize: (i) => `update_project — ${i.id.slice(0, 8)}`, run: ({ id, ...rest }, ctx) => p.updateProject(ctx.user.id, id, rest) });
+defineTool({ name: "create_project", module: "projects", risk: "low", description: "Create a project.", schema: p.projectCreateSchema.omit({ source: true }), summarize: (i) => `create_project — ${i.name}`, run: (i, ctx) => p.createProject(ctx.user.id, { ...i, source: "ai" }, "ai") });
+defineTool({ name: "update_project", module: "projects", risk: "medium", description: "Update a project (status, priority, deadline, notes, progress).", schema: z.object({ id: z.string().uuid() }).extend(p.projectUpdateSchema.omit({ source: true }).shape), summarize: (i) => `update_project — ${i.id.slice(0, 8)}`, run: ({ id, ...rest }, ctx) => p.updateProject(ctx.user.id, id, rest, "ai") });
 defineTool({ name: "create_project_task", module: "projects", risk: "low", description: "Create a task inside a project.", schema: z.object({ projectId: z.string().uuid(), title: z.string(), dueDate: dateSchema.optional(), priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"), description: z.string().optional(), estimatedMinutes: z.number().int().optional() }), summarize: (i) => `create_project_task — ${i.title}`, run: (i, ctx) => createTask(ctx.user.id, { ...i, category: "project", status: "todo", source: "ai" }) });
 
 defineTool({
@@ -18,7 +18,7 @@ defineTool({
   run: async (i, ctx) => {
     const project = await p.getProject(ctx.user.id, i.id);
     if (project.name.trim().toLowerCase() !== i.name.trim().toLowerCase()) throw new Error(`That id belongs to "${project.name}", not "${i.name}". Nothing was deleted — check the id with get_projects.`);
-    await p.deleteProject(ctx.user.id, i.id);
+    await p.deleteProject(ctx.user.id, i.id, "ai");
     return { deleted: i.id, name: project.name, openTasks: project.openTasks };
   },
 });
@@ -28,5 +28,5 @@ defineTool({
   description: "Add a milestone to a project (the project equivalent of add_milestone for goals). Tick it with complete_milestone.",
   schema: z.object({ projectId: z.string().uuid(), title: z.string().min(1).max(200), dueDate: dateSchema.optional(), position: z.number().int().min(0).default(0) }),
   summarize: (i) => `add_project_milestone — ${i.title}`,
-  run: ({ projectId, ...rest }, ctx) => p.addProjectMilestone(ctx.user.id, projectId, rest),
+  run: ({ projectId, ...rest }, ctx) => p.addProjectMilestone(ctx.user.id, projectId, rest, "ai"),
 });

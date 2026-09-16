@@ -84,11 +84,18 @@ const LOADERS: { [K in SnapshotSection]: (c: Ctx) => Promise<unknown> } = {
       metric: g.metricTarget != null ? { current: g.metricCurrent ?? 0, target: g.metricTarget, unit: g.metricUnit } : null,
       tracks: isLinked(g) ? `${g.metricSource}/${g.metricKind} per ${g.metricPeriod}` : null,
       behindPace: isLinked(g) ? goalPace(g, c.today, c.tz).atRisk : false,
+      overdue: Boolean(g.deadline && g.deadline < c.today),
     }));
   },
   async projects(c) {
     const rows = await listProjects(c.userId, "active");
-    return rows.map((p) => ({ id: p.id, name: p.name, status: p.status, progress: p.computedProgress, openTasks: p.openTasks, deadline: p.deadline, priority: p.priority }));
+    return rows.map((p) => ({
+      id: p.id, name: p.name, status: p.status, progress: p.computedProgress, openTasks: p.openTasks,
+      deadline: p.deadline, priority: p.priority,
+      overdue: Boolean(p.deadline && p.deadline < c.today),
+      // Counts only; the detail is one get_projects call away.
+      overdueTasks: p.overdueTasks, overdueMilestones: p.overdueMilestones,
+    }));
   },
   async training(c) {
     const [workout, week] = await Promise.all([workoutForDate(c.userId, c.today).catch(() => null), weeklyTrainingStatus(c.userId, c.tz).catch(() => null)]);
@@ -171,8 +178,8 @@ export async function lifeSnapshot(user: SessionUser, opts: SnapshotOptions = {}
 type Sec<T> = T | undefined;
 type TasksSec = Sec<{ counts: { today: number; overdue: number; open: number }; today: { id: string; title: string; dueDate: string | null; priority: string }[]; overdue: { id: string; title: string; dueDate: string | null }[]; upcoming: { title: string; dueDate: string | null }[] }>;
 type CalSec = Sec<{ today: { title: string; kind: string; start: string | null; end: string | null; allDay: boolean }[]; ahead: { date: string; title: string }[] }>;
-type GoalsSec = Sec<{ name: string; progress: number; deadline: string | null; metric: { current: number; target: number; unit: string | null } | null; behindPace: boolean }[]>;
-type ProjSec = Sec<{ name: string; progress: number; openTasks: number; deadline: string | null }[]>;
+type GoalsSec = Sec<{ name: string; progress: number; deadline: string | null; metric: { current: number; target: number; unit: string | null } | null; behindPace: boolean; overdue: boolean }[]>;
+type ProjSec = Sec<{ name: string; progress: number; openTasks: number; deadline: string | null; overdue: boolean; overdueTasks: number; overdueMilestones: number }[]>;
 type TrainSec = Sec<{ week: { completed: number; plannedDays: number | null } | null; today: { cycleDay: string; day: { name: string; isRest: boolean; exercises: number; notes: string | null } | null; session: { finished: boolean } | null } | null }>;
 type StudySec = Sec<{ minutesLast7Days: number; nextExams: { title: string; date: string }[]; nextAssignments: { title: string; dueDate: string | null }[] }>;
 type GermanSec = Sec<{ minutesLast7Days: number; streak: number; unitsPassed: number } | null>;
@@ -200,9 +207,9 @@ export function renderCompact(snap: LifeSnapshot): string[] {
     if (c.ahead.length) lines.push(`  Ahead (${snap.horizonDays}d): ${c.ahead.length} events, next ${c.ahead.slice(0, 3).map((e) => `${e.date} ${e.title}`).join("; ")}`);
   }
   const g = s.goals as GoalsSec;
-  if (g) lines.push(`- Active goals (${g.length}): ${g.slice(0, 6).map((x) => `${x.name} ${x.progress}%${x.metric ? ` (${x.metric.current}/${x.metric.target} ${x.metric.unit ?? ""})`.replace(" )", ")") : ""}${x.behindPace ? " BEHIND PACE" : ""}${x.deadline ? ` by ${x.deadline}` : ""}`).join("; ") || "none"}`);
+  if (g) lines.push(`- Active goals (${g.length}): ${g.slice(0, 6).map((x) => `${x.name} ${x.progress}%${x.metric ? ` (${x.metric.current}/${x.metric.target} ${x.metric.unit ?? ""})`.replace(" )", ")") : ""}${x.behindPace ? " BEHIND PACE" : ""}${x.deadline ? `${x.overdue ? " OVERDUE since" : " by"} ${x.deadline}` : ""}`).join("; ") || "none"}`);
   const p = s.projects as ProjSec;
-  if (p) lines.push(`- Active projects (${p.length}): ${p.slice(0, 5).map((x) => `${x.name} ${x.progress}% · ${x.openTasks} open${x.deadline ? ` · by ${x.deadline}` : ""}`).join("; ") || "none"}`);
+  if (p) lines.push(`- Active projects (${p.length}): ${p.slice(0, 5).map((x) => `${x.name} ${x.progress}% · ${x.openTasks} open${x.overdueTasks ? ` (${x.overdueTasks} late)` : ""}${x.overdueMilestones ? ` · ${x.overdueMilestones} milestone${x.overdueMilestones === 1 ? "" : "s"} late` : ""}${x.deadline ? `${x.overdue ? " · OVERDUE since" : " · by"} ${x.deadline}` : ""}`).join("; ") || "none"}`);
   const tr = s.training as TrainSec;
   if (tr) {
     const day = tr.today?.day;

@@ -187,10 +187,15 @@ d("analytics over real data", () => {
   it("goals and projects report counts, progress and milestones", async () => {
     const a = await analyticsOverview(user.id, "week", TZ);
     expect(a.goals.active).toBe(1);
-    expect(a.goals.avgProgress).toBe(40);
+    // The goal was created at a hand-typed 40 % and then given a milestone. From that moment its
+    // progress is measured by its checkpoints (phase 3.8): 0 of 1 reached, so 0 %. The hand-typed
+    // number was a guess; a real structure replaces it, and the change is in the audit log.
+    expect(a.goals.avgProgress).toBe(0);
     expect(a.goals.milestones.total).toBe(1);
     expect(a.goals.milestones.completed).toBe(0);
+    expect(a.goals.milestones.overdue).toBe(0);
     expect(a.projects.active).toBe(1);
+    // The project has neither tasks nor milestones, so the manual value still stands.
     expect(a.projects.avgProgress).toBe(60);
   });
 

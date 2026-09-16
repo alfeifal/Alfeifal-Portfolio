@@ -5,7 +5,7 @@ import { useToast } from "@/components/toast";
 import { Stagger, StaggerItem } from "@/components/motion";
 import Link from "next/link";
 import { Badge, Bar, Empty, ErrorBox, Field, Modal, PageHeader, Tabs, Button, SkeletonCards } from "@/components/ui";
-import { api, fmtDate, useApi } from "@/lib/client";
+import { api, fmtDate, todayLocal, useApi } from "@/lib/client";
 import type { Goal } from "@/lib/types";
 
 /** Metric links the server can compute (mirrors METRIC_SOURCES in services/goal-metrics.ts). */
@@ -52,7 +52,15 @@ export default function GoalsPage() {
       <Tabs value={status} onChange={setStatus} options={[{ value: "active", label: "Active" }, { value: "paused", label: "Paused" }, { value: "completed", label: "Completed" }, { value: "abandoned", label: "Abandoned" }]} />
       {goals.error && <ErrorBox error={goals.error} retry={goals.reload} />}
       {goals.loading && !goals.data ? <SkeletonCards n={4} /> : goals.data?.length === 0 ? <Empty icon={<Target size={18} />} title={`No ${status} goals`} action={status === "active" ? <Button variant="primary" size="sm" onClick={() => setModal(true)}>Create a goal</Button> : undefined}>{status === "active" ? "Give the assistant something to track: a deadline, a metric, a habit." : "Goals with this status will appear here."}</Empty> : (
-        <Stagger as="ul" className="grid gap-2 md:grid-cols-2" gap={0.04}>{goals.data?.map((g) => <StaggerItem as="li" key={g.id}><Link href={`/goals/${g.id}`} className="card card-interactive block p-3"><div className="flex items-center justify-between"><span className="font-medium">{g.name}</span><Badge>{g.category}</Badge></div><p className="mt-0.5 text-xs muted">{g.deadline ? `by ${fmtDate(g.deadline)}` : "no deadline"}{g.metricName ? ` · ${g.metricCurrent ?? 0}/${g.metricTarget} ${g.metricUnit ?? ""}` : ""} · {g.priority}</p><div className="mt-2 flex items-center gap-2"><Bar value={g.progress / 100} tone={g.progress >= 100 ? "positive" : "accent"} /><span className="text-xs tnum">{g.progress}%</span></div></Link></StaggerItem>)}</Stagger>
+        <Stagger as="ul" className="grid gap-2 md:grid-cols-2" gap={0.04}>{goals.data?.map((g) => {
+          const late = Boolean(g.deadline && g.deadline < todayLocal() && g.status === "active");
+          return (
+          <StaggerItem as="li" key={g.id}><Link href={`/goals/${g.id}`} className="card card-interactive block p-3">
+            <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate font-medium">{g.name}</span><span className="flex shrink-0 items-center gap-1">{late && <Badge tone="negative">overdue</Badge>}<Badge>{g.category}</Badge></span></div>
+            <p className="mt-0.5 text-xs muted">{g.deadline ? `${late ? "was due" : "by"} ${fmtDate(g.deadline)}` : "no deadline"}{g.metricName ? ` · ${g.metricCurrent ?? 0}/${g.metricTarget} ${g.metricUnit ?? ""}` : ""} · {g.priority}{g.metricSource ? ` · tracks ${g.metricSource}` : ""}</p>
+            <div className="mt-2 flex items-center gap-2"><Bar value={g.progress / 100} tone={g.progress >= 100 ? "positive" : "accent"} /><span className="text-xs tnum">{g.progress}%</span></div>
+          </Link></StaggerItem>);
+        })}</Stagger>
       )}
       <Modal open={modal} onClose={() => setModal(false)} title="New goal">
         <form onSubmit={save} className="space-y-3">

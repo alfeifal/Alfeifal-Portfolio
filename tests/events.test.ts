@@ -217,11 +217,12 @@ d("phase 2 — event bus and linked goals", () => {
     } finally { await deleteTestUser(fresh.id); }
   });
 
-  it("the bus registers exactly the two production subscribers", async () => {
+  it("the bus registers exactly the production subscribers", async () => {
     await emitDomainEvent(user.id, { type: "german.state_saved", revision: 1 }, { tz: TZ });
     const names = listSubscribers().map((s) => s.name);
-    expect(names).toContain("goals");
+    expect(names).toContain("goals");        // linked goals, recomputed from their module
+    expect(names).toContain("progress");     // phase 3.8: manual goals and projects, from their own work
     expect(names).toContain("notifications");
-    expect(names.filter((n) => !n.startsWith("test-"))).toHaveLength(2);
+    expect(names.filter((n) => !n.startsWith("test-"))).toHaveLength(3);
   });
 });

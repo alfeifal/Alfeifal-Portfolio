@@ -5,7 +5,7 @@ import { useToast } from "@/components/toast";
 import { Stagger, StaggerItem } from "@/components/motion";
 import Link from "next/link";
 import { Badge, Bar, Empty, ErrorBox, Field, Modal, PageHeader, Tabs, Button, SkeletonCards } from "@/components/ui";
-import { api, fmtDate, useApi } from "@/lib/client";
+import { api, fmtDate, todayLocal, useApi } from "@/lib/client";
 import type { Project } from "@/lib/types";
 
 export default function ProjectsPage() {
@@ -23,7 +23,17 @@ export default function ProjectsPage() {
       <Tabs value={status} onChange={setStatus} options={[{ value: "active", label: "Active" }, { value: "planning", label: "Planning" }, { value: "idea", label: "Ideas" }, { value: "on_hold", label: "On hold" }, { value: "completed", label: "Completed" }, { value: "all", label: "All" }]} />
       {projects.error && <ErrorBox error={projects.error} retry={projects.reload} />}
       {projects.loading && !projects.data ? <SkeletonCards n={4} /> : projects.data?.length === 0 ? <Empty icon={<FolderKanban size={18} />} title="No projects here" action={<Button variant="primary" size="sm" onClick={() => setModal(true)}>Create a project</Button>}>Business, personal, learning or technical — each project keeps its tasks, milestones and notes together.</Empty> : (
-        <Stagger as="ul" className="grid gap-2 md:grid-cols-2" gap={0.04}>{projects.data?.map((p) => <StaggerItem as="li" key={p.id}><Link href={`/projects/${p.id}`} className="card card-interactive block p-3"><div className="flex items-center justify-between"><span className="font-medium">{p.name}</span><Badge>{p.kind}</Badge></div><p className="mt-0.5 text-xs muted">{p.status} · {p.priority}{p.deadline ? ` · ${fmtDate(p.deadline)}` : ""} · {p.openTasks} open / {p.doneTasks} done</p><div className="mt-2 flex items-center gap-2"><Bar value={p.computedProgress / 100} /><span className="text-xs tnum">{p.computedProgress}%</span></div></Link></StaggerItem>)}</Stagger>
+        <Stagger as="ul" className="grid gap-2 md:grid-cols-2" gap={0.04}>{projects.data?.map((p) => {
+          const late = Boolean(p.deadline && p.deadline < todayLocal());
+          return (
+          <StaggerItem as="li" key={p.id}><Link href={`/projects/${p.id}`} className="card card-interactive block p-3">
+            <div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate font-medium">{p.name}</span><span className="flex shrink-0 items-center gap-1">{late && <Badge tone="negative">overdue</Badge>}{p.overdueTasks > 0 && <Badge tone="warning">{p.overdueTasks} late</Badge>}<Badge>{p.kind}</Badge></span></div>
+            <p className="mt-0.5 text-xs muted">{p.status} · {p.priority}{p.deadline ? ` · ${fmtDate(p.deadline)}` : ""} · {p.openTasks} open / {p.doneTasks} done{p.totalMilestones > 0 ? ` · ${p.doneMilestones}/${p.totalMilestones} milestones` : ""}</p>
+            <div className="mt-2 flex items-center gap-2"><Bar value={p.computedProgress / 100} /><span className="text-xs tnum">{p.computedProgress}%</span></div>
+            {/* Never a bare percentage: say what it was counted over, or that there is nothing to count. */}
+            <p className="mt-1 text-[11px] muted">{p.progressBasis === "none" ? "No tasks or milestones yet" : p.progressBasis === "manual" ? "set by hand" : `${p.progressDone} of ${p.progressTotal} ${p.progressBasis}`}</p>
+          </Link></StaggerItem>);
+        })}</Stagger>
       )}
       <Modal open={modal} onClose={() => setModal(false)} title="New project">
         <form onSubmit={save} className="space-y-3">

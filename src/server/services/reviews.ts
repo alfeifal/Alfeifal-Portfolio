@@ -121,6 +121,7 @@ export function buildFacts(a: Analytics) {
       data: sufficiency(a.projects.active + a.projects.completed, days),
       active: a.projects.active, completed: a.projects.completed,
       avgProgress: a.projects.avgProgress, milestones: a.projects.milestones,
+      completedInRange: a.projects.completedInRange, overdue: a.projects.overdue,
     },
     journal: {
       data: sufficiency(a.journal.entries, days),
@@ -235,9 +236,16 @@ export function deriveObservations(facts: ReturnType<typeof buildFacts>, trends:
     add({ module: "goals", kind: "fact", text: `${g.active} active goal${g.active === 1 ? "" : "s"}, average progress ${g.avgProgress}%.`, evidence: { active: g.active, avgProgress: g.avgProgress } });
     if (g.milestones.completedInRange > 0) add({ module: "goals", kind: "fact", text: `${g.milestones.completedInRange} milestone${g.milestones.completedInRange === 1 ? " was" : "s were"} completed in this period.`, evidence: { completedInRange: g.milestones.completedInRange } });
     if (g.pastDeadline > 0) add({ module: "goals", kind: "fact", text: `${g.pastDeadline} goal${g.pastDeadline === 1 ? " is" : "s are"} past their deadline and still open.`, evidence: { pastDeadline: g.pastDeadline } });
+    if (g.milestones.overdue > 0) add({ module: "goals", kind: "fact", text: `${g.milestones.overdue} goal milestone${g.milestones.overdue === 1 ? " is" : "s are"} past their due date and still open.`, evidence: { overdue: g.milestones.overdue } });
   }
   const pr = facts.projects;
-  if (pr.data !== "none") add({ module: "projects", kind: "fact", text: `${pr.active} active project${pr.active === 1 ? "" : "s"}, average progress ${pr.avgProgress}%.`, evidence: { active: pr.active, avgProgress: pr.avgProgress } });
+  if (pr.data === "none") add({ module: "projects", kind: "gap", text: "No projects are being tracked.", evidence: { active: 0 } });
+  else {
+    add({ module: "projects", kind: "fact", text: `${pr.active} active project${pr.active === 1 ? "" : "s"}, average progress ${pr.avgProgress}%.`, evidence: { active: pr.active, avgProgress: pr.avgProgress } });
+    if (pr.completedInRange > 0) add({ module: "projects", kind: "fact", text: `${pr.completedInRange} project${pr.completedInRange === 1 ? " was" : "s were"} completed in this period.`, evidence: { completedInRange: pr.completedInRange } });
+    if (pr.overdue > 0) add({ module: "projects", kind: "fact", text: `${pr.overdue} project${pr.overdue === 1 ? " is" : "s are"} past their deadline and still open.`, evidence: { overdue: pr.overdue } });
+    if (pr.milestones.overdue > 0) add({ module: "projects", kind: "fact", text: `${pr.milestones.overdue} project milestone${pr.milestones.overdue === 1 ? " is" : "s are"} past their due date and still open.`, evidence: { overdue: pr.milestones.overdue } });
+  }
 
   // ---- journal & calendar
   const j = facts.journal;

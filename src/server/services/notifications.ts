@@ -1,7 +1,7 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/server/db";
-import { assignments, events, exams, goals, notifications, priceAlerts, tasks } from "@/server/db/schema";
+import { assignments, events, exams, goals, milestones, notifications, priceAlerts, projects, tasks } from "@/server/db/schema";
 import { addDaysKey, dateKey, isoWeekKey, monthRange, todayKey, weekRange } from "@/lib/dates";
 import { getPreferences, patchPreferences } from "./users";
 import { financialSummary, listSavingsGoals } from "./finance";
@@ -94,6 +94,44 @@ export async function generateNotifications(userId: string, tz?: string) {
     for (const a of as) await add({ kind: "deadline", title: `Assignment due ${a.dueDate}: ${a.title}`, href: "/studies", dedupeKey: `assignment:${a.id}:${today}` });
     const gs = await db.select().from(goals).where(and(eq(goals.userId, userId), eq(goals.status, "active"), gte(goals.deadline, today), lte(goals.deadline, horizon)));
     for (const g of gs) await add({ kind: "goal", title: `Goal deadline ${g.deadline}: ${g.name} (${g.progress}%)`, href: `/goals/${g.id}`, dedupeKey: `goal:deadline:${g.id}:${today}` });
+
+    /**
+     * Phase 3.8. Three things could slip silently before: a goal whose deadline has already passed, a
+     * project deadline (which had no notice at all), and a milestone that is due or already late.
+     *
+     * Each is a statement of fact with its own dedupe key, so a condition that persists produces one
+     * notice — per goal and deadline, per project and deadline, per milestone — not one per day.
+     */
+    const overdueGoals = await db.select().from(goals)
+      .where(and(eq(goals.userId, userId), eq(goals.status, "active"), isNotNull(goals.deadline), lt(goals.deadline, today)));
+    for (const g of overdueGoals) {
+      await add({ kind: "goal", title: `Goal past its deadline: ${g.name}`, body: `Was due ${g.deadline} · ${g.progress}% done`, href: `/goals/${g.id}`, dedupeKey: `goal:overdue:${g.id}:${g.deadline}` });
+    }
+
+    const projectDeadlines = await db.select().from(projects)
+      .where(and(eq(projects.userId, userId), inArray(projects.status, ["active", "planning", "on_hold"]), isNotNull(projects.deadline), lte(projects.deadline, horizon)));
+    for (const p of projectDeadlines) {
+      const late = p.deadline! < today;
+      await add({
+        kind: "deadline",
+        title: late ? `Project past its deadline: ${p.name}` : `Project deadline ${p.deadline}: ${p.name}`,
+        body: `${p.progress}% done`,
+        href: `/projects/${p.id}`,
+        dedupeKey: `project:${late ? "overdue" : "deadline"}:${p.id}:${p.deadline}`,
+      });
+    }
+
+    const dueMilestones = await db.select().from(milestones)
+      .where(and(eq(milestones.userId, userId), isNull(milestones.completedAt), isNotNull(milestones.dueDate), lte(milestones.dueDate, horizon)));
+    for (const m of dueMilestones) {
+      const late = m.dueDate! < today;
+      await add({
+        kind: "deadline",
+        title: late ? `Milestone past its due date: ${m.title}` : `Milestone due ${m.dueDate}: ${m.title}`,
+        href: m.projectId ? `/projects/${m.projectId}` : m.goalId ? `/goals/${m.goalId}` : "/goals",
+        dedupeKey: `milestone:${late ? "overdue" : "due"}:${m.id}:${m.dueDate}`,
+      });
+    }
   }
   if (s.market) {
     const triggered = await db.select().from(priceAlerts).where(and(eq(priceAlerts.userId, userId), eq(priceAlerts.active, false), sql`${priceAlerts.triggeredAt} > now() - interval '1 day'`));

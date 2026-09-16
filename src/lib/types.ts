@@ -5,7 +5,18 @@ export interface Goal { id: string; name: string; description: string | null; ca
 export interface PlanItem { id: string; kind: "task" | "event" | "note"; status: "proposed" | "accepted" | "rejected" | "skipped"; title: string; notes: string | null; date: string | null; startAt: string | null; endAt: string | null; allDay: boolean; estimatedMinutes: number | null; eventKind: string | null; priority: string | null; projectId: string | null; goalId: string | null; createdTaskId: string | null; createdEventId: string | null }
 export interface Plan { id: string; horizon: "day" | "week"; periodKey: string; status: "draft" | "accepted" | "partially_accepted" | "rejected" | "superseded"; title: string | null; content: string; acceptedAt: string | null; rejectedAt: string | null; createdAt: string; items: PlanItem[] }
 export interface PlanAcceptResult { itemId: string; title: string; kind: string; status: "created" | "already_created" | "skipped" | "failed"; taskId?: string; eventId?: string; error?: string }
-export interface Project { id: string; name: string; description: string | null; kind: string; status: string; priority: string; deadline: string | null; notes: string | null; progress: number; openTasks: number; doneTasks: number; computedProgress: number }
+/**
+ * `computedProgress` is the number to show. `progressBasis` says where it came from — tasks,
+ * milestones or a value the user set by hand — so a percentage on screen is never unexplained.
+ */
+export interface Project {
+  id: string; name: string; description: string | null; kind: string; status: string; priority: string;
+  deadline: string | null; notes: string | null; progress: number;
+  openTasks: number; doneTasks: number; totalMilestones: number; doneMilestones: number;
+  overdueTasks: number; overdueMilestones: number;
+  computedProgress: number; progressBasis: "tasks" | "milestones" | "manual" | "none";
+  progressDone: number; progressTotal: number;
+}
 export interface Transaction { id: string; type: "expense" | "income" | "transfer"; amount: number; currency: string; date: string; description: string; merchant: string | null; accountId: string | null; toAccountId: string | null; categoryId: string | null; categoryName?: string | null; accountName?: string | null; source: string }
 export interface DashboardData {
   today: string; widgets: string[]; unreadNotifications: number;

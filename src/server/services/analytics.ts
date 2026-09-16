@@ -83,7 +83,17 @@ export async function analyticsOverview(userId: string, periodOrOpts: Period | {
       overdue: sql<number>`count(*) filter (where ${tasks.status} in ('todo','in_progress') and ${tasks.dueDate} < ${todayKey(tz)})`,
     }).from(tasks).where(eq(tasks.userId, userId)).then((r) => r[0]),
     db.select({ active: sql<number>`count(*) filter (where ${goals.status}='active')`, completed: sql<number>`count(*) filter (where ${goals.status}='completed')`, avgProgress: sql<number>`coalesce(avg(${goals.progress}) filter (where ${goals.status}='active'),0)`, completedInRange: sql<number>`count(*) filter (where ${goals.status}='completed' and ${goals.completedAt} >= ${range.from}::date and ${goals.completedAt} <= ${range.to}::date + interval '1 day')`, linked: sql<number>`count(*) filter (where ${goals.metricSource} is not null)`, atRisk: sql<number>`count(*) filter (where ${goals.status}='active' and ${goals.deadline} is not null and ${goals.deadline} < ${todayKey(tz)})` }).from(goals).where(eq(goals.userId, userId)).then((r) => r[0]),
-    db.select({ active: sql<number>`count(*) filter (where ${projects.status}='active')`, completed: sql<number>`count(*) filter (where ${projects.status}='completed')`, total: sql<number>`count(*)`, avgProgress: sql<number>`coalesce(avg(${projects.progress}) filter (where ${projects.status}='active'),0)` }).from(projects).where(eq(projects.userId, userId)).then((r) => r[0]),
+    db.select({
+      active: sql<number>`count(*) filter (where ${projects.status}='active')`,
+      completed: sql<number>`count(*) filter (where ${projects.status}='completed')`,
+      total: sql<number>`count(*)`,
+      // `projects.progress` is kept equal to the derived value by recomputeProjectProgress, so this
+      // average is the same number the Projects page shows. Archived projects are excluded from
+      // "active" by the status filter, so a shelved project cannot drag the average.
+      avgProgress: sql<number>`coalesce(avg(${projects.progress}) filter (where ${projects.status}='active'),0)`,
+      completedInRange: sql<number>`count(*) filter (where ${projects.status}='completed' and ${projects.completedAt} >= ${range.from}::date and ${projects.completedAt} <= ${range.to}::date + interval '1 day')`,
+      overdue: sql<number>`count(*) filter (where ${projects.status} in ('active','planning','on_hold') and ${projects.deadline} is not null and ${projects.deadline} < ${todayKey(tz)})`,
+    }).from(projects).where(eq(projects.userId, userId)).then((r) => r[0]),
   ]);
 
   // --- Productivity: created and completed per day, plus the weekday distribution of completions.
@@ -94,7 +104,19 @@ export async function analyticsOverview(userId: string, periodOrOpts: Period | {
     db.select({ dow: sql<number>`extract(isodow from (${tasks.completedAt} at time zone ${tz ?? "UTC"}))`, n: sql<number>`count(*)` }).from(tasks)
       .where(and(eq(tasks.userId, userId), eq(tasks.status, "done"), gte(tasks.completedAt, new Date(range.from)), lte(tasks.completedAt, new Date(range.to + "T23:59:59Z"))))
       .groupBy(sql`1`).orderBy(sql`1`),
-    db.select({ total: sql<number>`count(*)`, completed: sql<number>`count(*) filter (where ${milestones.completedAt} is not null)`, completedInRange: sql<number>`count(*) filter (where ${milestones.completedAt} >= ${range.from}::date and ${milestones.completedAt} <= ${range.to}::date + interval '1 day')`, forGoals: sql<number>`count(*) filter (where ${milestones.goalId} is not null)`, forProjects: sql<number>`count(*) filter (where ${milestones.projectId} is not null)` }).from(milestones).where(eq(milestones.userId, userId)).then((r) => r[0]),
+    db.select({
+      total: sql<number>`count(*)`,
+      completed: sql<number>`count(*) filter (where ${milestones.completedAt} is not null)`,
+      completedInRange: sql<number>`count(*) filter (where ${milestones.completedAt} >= ${range.from}::date and ${milestones.completedAt} <= ${range.to}::date + interval '1 day')`,
+      forGoals: sql<number>`count(*) filter (where ${milestones.goalId} is not null)`,
+      forProjects: sql<number>`count(*) filter (where ${milestones.projectId} is not null)`,
+      // Open, dated and already past — the "what is slipping" number Goals and Projects both need.
+      overdue: sql<number>`count(*) filter (where ${milestones.completedAt} is null and ${milestones.dueDate} is not null and ${milestones.dueDate} < ${todayKey(tz)})`,
+      overdueForGoals: sql<number>`count(*) filter (where ${milestones.goalId} is not null and ${milestones.completedAt} is null and ${milestones.dueDate} is not null and ${milestones.dueDate} < ${todayKey(tz)})`,
+      overdueForProjects: sql<number>`count(*) filter (where ${milestones.projectId} is not null and ${milestones.completedAt} is null and ${milestones.dueDate} is not null and ${milestones.dueDate} < ${todayKey(tz)})`,
+      completedForGoalsInRange: sql<number>`count(*) filter (where ${milestones.goalId} is not null and ${milestones.completedAt} >= ${range.from}::date and ${milestones.completedAt} <= ${range.to}::date + interval '1 day')`,
+      completedForProjectsInRange: sql<number>`count(*) filter (where ${milestones.projectId} is not null and ${milestones.completedAt} >= ${range.from}::date and ${milestones.completedAt} <= ${range.to}::date + interval '1 day')`,
+    }).from(milestones).where(eq(milestones.userId, userId)).then((r) => r[0]),
     db.select({ kind: events.kind, n: sql<number>`count(*)`, minutes: sql<number>`coalesce(sum(extract(epoch from (${events.endAt} - ${events.startAt})) / 60), 0)` }).from(events)
       .where(and(eq(events.userId, userId), gte(events.startAt, new Date(range.from + "T00:00:00")), lte(events.startAt, new Date(range.to + "T23:59:59"))))
       .groupBy(events.kind).orderBy(sql`2 desc`),
@@ -183,12 +205,13 @@ export async function analyticsOverview(userId: string, periodOrOpts: Period | {
     goals: {
       active: Number(goalStats.active), completed: Number(goalStats.completed), avgProgress: Math.round(Number(goalStats.avgProgress)),
       completedInRange: Number(goalStats.completedInRange), linked: Number(goalStats.linked), pastDeadline: Number(goalStats.atRisk),
-      milestones: { total: Number(milestoneStats.forGoals), completed: Number(milestoneStats.completed), completedInRange: Number(milestoneStats.completedInRange) },
+      milestones: { total: Number(milestoneStats.forGoals), completed: Number(milestoneStats.completed), completedInRange: Number(milestoneStats.completedForGoalsInRange), overdue: Number(milestoneStats.overdueForGoals) },
     },
     projects: {
       active: Number(projectStats.active), completed: Number(projectStats.completed), total: Number(projectStats.total),
       avgProgress: Math.round(Number(projectStats.avgProgress)),
-      milestones: { total: Number(milestoneStats.forProjects) },
+      completedInRange: Number(projectStats.completedInRange), overdue: Number(projectStats.overdue),
+      milestones: { total: Number(milestoneStats.forProjects), completedInRange: Number(milestoneStats.completedForProjectsInRange), overdue: Number(milestoneStats.overdueForProjects) },
     },
     source: "calculated" as const,
   };

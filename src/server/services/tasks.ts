@@ -96,7 +96,11 @@ export async function completeTask(userId: string, id: string, tz?: string) {
 export async function deleteTask(userId: string, id: string, tz?: string) {
   const t = await getTask(userId, id);
   await db.delete(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
-  if (t.status === "done") await emitDomainEvent(userId, { type: "task.changed", taskId: id, projectId: t.projectId, goalId: t.goalId, reason: "deleted" }, { tz });
+  // Announced whatever its status was: removing an *open* task changes the denominator of its
+  // project's and goal's progress just as much as removing a completed one changes the numerator.
+  if (t.status === "done" || t.projectId || t.goalId) {
+    await emitDomainEvent(userId, { type: "task.changed", taskId: id, projectId: t.projectId, goalId: t.goalId, reason: "deleted" }, { tz });
+  }
 }
 
 /** recurrence grammar: daily | weekdays | weekly | weekly:MO,WE,FR | monthly | monthly:15 | yearly */
