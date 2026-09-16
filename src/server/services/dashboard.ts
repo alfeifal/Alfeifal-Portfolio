@@ -21,14 +21,48 @@ import { plannerSnapshot } from "./planner";
 export const DEFAULT_WIDGETS = ["today", "finance", "goals", "projects", "training", "studies", "investing", "trading", "news"] as const;
 export type Widget = (typeof DEFAULT_WIDGETS)[number];
 
+/**
+ * How often the Home page may run background maintenance for one user.
+ *
+ * `generateNotifications` scans tasks, deadlines, training, finance, studies, goals, projects and
+ * milestones. Measured on a year of seeded data it took 51 ms of the endpoint's 72 ms — 71 % of Home's
+ * server time — and it ran awaited, *before* the parallel data load even started.
+ *
+ * It is maintenance, not something Home renders: the hourly cron already runs it, and every notice it
+ * writes carries a dedupe key, so running it less often can only delay a notice, never lose or
+ * duplicate one. Home keeps calling it so deployments without a scheduler still work.
+ */
+export const MAINTENANCE_INTERVAL_MS = 5 * 60_000;
+const lastMaintenance = new Map<string, number>();
+
+/** Test seam. */
+export function __resetMaintenanceThrottle() { lastMaintenance.clear(); }
+
+/**
+ * Runs the maintenance pass at most once per interval per user. Returns a promise the caller can
+ * settle *alongside* the data load rather than before it, so when it does run its cost overlaps with
+ * the queries instead of adding to them.
+ */
+function maintenance(userId: string, tz: string): Promise<unknown> {
+  const now = Date.now();
+  const last = lastMaintenance.get(userId) ?? 0;
+  if (now - last < MAINTENANCE_INTERVAL_MS) return Promise.resolve(null);
+  lastMaintenance.set(userId, now);
+  return Promise.all([
+    processRecurring(userId, tz).catch(() => 0),
+    generateNotifications(userId, tz).catch(() => 0),
+  ]);
+}
+
 /** Everything the Home page needs, in one round trip. Configurable via preferences.dashboard.widgets. */
 export async function dashboardData(user: SessionUser) {
   const tz = user.timezone;
   const today = todayKey(tz);
   const m = monthRange(new Date());
+  // Started now, awaited with everything else: it no longer gates the data load.
+  const maintaining = maintenance(user.id, tz);
   const prefs = await getPreferences(user.id);
   const widgets = ((prefs.dashboard as { widgets?: Widget[] } | undefined)?.widgets ?? [...DEFAULT_WIDGETS]).filter((w) => DEFAULT_WIDGETS.includes(w));
-  await Promise.all([processRecurring(user.id, tz).catch(() => 0), generateNotifications(user.id, tz).catch(() => 0)]);
   const has = (w: Widget) => widgets.includes(w);
   const [tasksToday, overdue, counts, events, plan, workout, recentWorkouts, week, finance, recentTx, savings, goals, projects, port, openTrades, watchlists, news, econ, study, exams, nutrition, german, unread] = await Promise.all([
     listTasks(user.id, { view: "today", tz, limit: 12 }),
@@ -53,7 +87,8 @@ export async function dashboardData(user: SessionUser) {
     has("studies") ? listExams(user.id, true, tz) : [],
     has("today") ? dailyNutrition(user.id, today) : null,
     has("studies") ? germanSummary(user.id, { from: addDaysKey(today, -6), to: today }) : null,
-    unreadCount(user.id),
+    // Counted after the maintenance pass settles, so a notice written by this very request is included.
+    maintaining.then(() => unreadCount(user.id)),
   ]);
   return {
     today, widgets, unreadNotifications: unread,
