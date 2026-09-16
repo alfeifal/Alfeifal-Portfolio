@@ -23,10 +23,23 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
 
 interface State<T> { data: T | null; error: string | null; loading: boolean }
 
-/** Tiny data hook: fetch on mount / when the key changes, expose refresh() and setData(). */
-export function useApi<T = unknown>(path: string | null, deps: unknown[] = []) {
-  const [state, setState] = useState<State<T>>({ data: null, error: null, loading: !!path });
+/**
+ * Tiny data hook: fetch on mount / when the key changes, expose refresh() and setData().
+ *
+ * `initialData` is how a Server Component hands over what it already loaded. When it is supplied the
+ * hook starts with that data and skips the fetch on mount — the page paints with real content instead
+ * of a skeleton, and the request that used to run after hydration does not happen at all. Everything
+ * else is unchanged: `refresh`, `reload`, the sequence guard and the module invalidation all still
+ * work, so a mutation still re-reads from the server.
+ *
+ * The skip applies only to the first mount of that path. Changing the key, refreshing, or an
+ * invalidation all fetch normally, so server-seeded data can never become permanently stale.
+ */
+export function useApi<T = unknown>(path: string | null, deps: unknown[] = [], initialData?: T | null) {
+  const [state, setState] = useState<State<T>>({ data: initialData ?? null, error: null, loading: !!path && initialData == null });
   const seq = useRef(0);
+  // Consumed once: the very first load for this path is the one the server already did.
+  const seeded = useRef(initialData != null);
   const load = useCallback(async (silent = false) => {
     if (!path) return;
     const id = ++seq.current;
@@ -38,7 +51,10 @@ export function useApi<T = unknown>(path: string | null, deps: unknown[] = []) {
       if (id === seq.current) setState((s) => ({ ...s, error: (e as Error).message, loading: false }));
     }
   }, [path, ...deps]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (seeded.current) { seeded.current = false; return; }
+    load();
+  }, [load]);
   // Refetch when something else (an AI action) changed this module's data server-side.
   useEffect(() => {
     if (!path) return;
@@ -48,19 +64,8 @@ export function useApi<T = unknown>(path: string | null, deps: unknown[] = []) {
   return { ...state, refresh: () => load(true), reload: () => load(false), setData };
 }
 
-export function fmtMoney(n: number | null | undefined, currency = "EUR") {
-  if (n == null || Number.isNaN(n)) return "—";
-  return new Intl.NumberFormat("es-ES", { style: "currency", currency, maximumFractionDigits: 2 }).format(n);
-}
-export function fmtNum(n: number | null | undefined, digits = 1) {
-  if (n == null || Number.isNaN(n)) return "—";
-  return new Intl.NumberFormat("es-ES", { maximumFractionDigits: digits }).format(n);
-}
-export function fmtDate(d: string | Date | null | undefined, opts: Intl.DateTimeFormatOptions = { day: "numeric", month: "short" }) {
-  if (!d) return "—";
-  const date = typeof d === "string" ? (d.length === 10 ? new Date(d + "T00:00:00") : new Date(d)) : d;
-  return new Intl.DateTimeFormat("es-ES", opts).format(date);
-}
+// One implementation, in @/lib/format, so a Server Component and a Client Component format alike.
+export { fmtDateServer as fmtDate, fmtMoneyServer as fmtMoney, fmtNumServer as fmtNum } from "./format";
 export function fmtTime(d: string | Date) {
   return new Intl.DateTimeFormat("es-ES", { hour: "2-digit", minute: "2-digit" }).format(typeof d === "string" ? new Date(d) : d);
 }
