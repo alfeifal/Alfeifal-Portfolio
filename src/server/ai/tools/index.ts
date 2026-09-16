@@ -18,3 +18,4 @@ import "./notifications";
 import "./academy";
 import "./settings";
 import "./analytics";
+import "./reviews";

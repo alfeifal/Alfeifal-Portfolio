@@ -39,6 +39,7 @@ export const MODULE_PATHS: Record<string, string[]> = {
   settings: ["/api/me"],
   ai: ["/api/ai/memory"],
   analytics: ["/api/analytics"],
+  reviews: ["/api/reviews"],
 };
 
 /** Every path prefix touched by the given tool modules, de-duplicated. Unknown modules contribute nothing. */

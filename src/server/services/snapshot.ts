@@ -14,6 +14,7 @@ import { financialSummary } from "./finance";
 import { dailyNutrition } from "./nutrition";
 import { plannerSnapshot } from "./planner";
 import { addDaysKey, todayKey } from "@/lib/dates";
+import { reviewsDigest } from "./reviews";
 
 /**
  * Life snapshot (phase 3.1): one place that answers "what is the state of this user right now",
@@ -135,9 +136,15 @@ const LOADERS: { [K in SnapshotSection]: (c: Ctx) => Promise<unknown> } = {
     return plannerSnapshot(c.userId, c.tz);
   },
   async reviews(c) {
-    const [daily, weekly] = await Promise.all([latestReportRow(c.userId, "daily_review"), latestReportRow(c.userId, "weekly_review")]);
+    const [daily, weekly, periodic] = await Promise.all([
+      latestReportRow(c.userId, "daily_review"),
+      latestReportRow(c.userId, "weekly_review"),
+      // Only a count and the newest period end: enough for the model to know a review exists and to
+      // fetch it with list_reviews/get_review, without any of its metrics entering every message.
+      reviewsDigest(c.userId).catch(() => ({ total: 0, lastPeriodEnd: null })),
+    ]);
     const slim = (r: Awaited<ReturnType<typeof latestReportRow>>) => (r ? { periodKey: r.periodKey, createdAt: r.createdAt, excerpt: r.content.slice(0, 400) } : null);
-    return { daily: slim(daily), weekly: slim(weekly) };
+    return { daily: slim(daily), weekly: slim(weekly), periodic };
   },
 };
 
@@ -170,7 +177,7 @@ type TrainSec = Sec<{ week: { completed: number; plannedDays: number | null } | 
 type StudySec = Sec<{ minutesLast7Days: number; nextExams: { title: string; date: string }[]; nextAssignments: { title: string; dueDate: string | null }[] }>;
 type GermanSec = Sec<{ minutesLast7Days: number; streak: number; unitsPassed: number } | null>;
 type FinSec = Sec<{ income: number; expenses: number; net: number; topCategories: { name: string; total: number }[]; budgetsAtRisk: { name: string; pct: number }[] } | null>;
-type RevSec = Sec<{ daily: { periodKey: string } | null; weekly: { periodKey: string } | null }>;
+type RevSec = Sec<{ daily: { periodKey: string } | null; weekly: { periodKey: string } | null; periodic?: { total: number; lastPeriodEnd: string | null } }>;
 type PlanSec = Sec<{ day: { id: string; status: string; items: unknown[]; pendingItems: number } | null; week: { id: string; status: string; pendingItems: number } | null; draftsAwaitingAnswer: number }>;
 
 /**
@@ -222,7 +229,12 @@ export function renderCompact(snap: LifeSnapshot): string[] {
     lines.push(`- Plan for today: ${d ? `${d.status} · ${d.items.length} items${d.pendingItems ? ` · ${d.pendingItems} awaiting the user's acceptance` : ""} (plan ${d.id.slice(0, 8)})` : "none"}${pl.week ? ` · week plan ${pl.week.status}` : ""}. Read it with get_plan; you cannot accept it yourself.`);
   }
   const r = s.reviews as RevSec;
-  if (r) lines.push(`- Last reviews: daily ${r.daily?.periodKey ?? "none yet"} · weekly ${r.weekly?.periodKey ?? "none yet"}. Call get_snapshot(["reviews"]) to read them.`);
+  if (r) {
+    // One line, ~80 characters: what exists, not what it says. The review itself is fetched on demand.
+    const p = r.periodic;
+    const periodic = p && p.total > 0 ? ` · ${p.total} structured review${p.total === 1 ? "" : "s"}, latest up to ${p.lastPeriodEnd} (list_reviews/get_review)` : "";
+    lines.push(`- Last reviews: daily ${r.daily?.periodKey ?? "none yet"} · weekly ${r.weekly?.periodKey ?? "none yet"}${periodic}. Call get_snapshot(["reviews"]) to read them.`);
+  }
   return lines;
 }
 

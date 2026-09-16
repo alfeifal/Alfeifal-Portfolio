@@ -9,3 +9,4 @@ export * from "./training";
 export * from "./nutrition";
 export * from "./studies";
 export * from "./german";
+export * from "./reviews";

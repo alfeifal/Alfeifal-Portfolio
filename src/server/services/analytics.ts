@@ -73,7 +73,15 @@ export async function analyticsOverview(userId: string, periodOrOpts: Period | {
     nutritionGoals(userId),
     monthlyHistory(userId, 12),
     portfolioHistory(userId, 120).catch(() => []),
-    db.select({ done: sql<number>`count(*) filter (where ${tasks.status} = 'done' and ${tasks.completedAt} >= ${range.from}::date)`, created: sql<number>`count(*) filter (where ${tasks.createdAt} >= ${range.from}::date)`, open: sql<number>`count(*) filter (where ${tasks.status} in ('todo','in_progress'))`, overdue: sql<number>`count(*) filter (where ${tasks.status} in ('todo','in_progress') and ${tasks.dueDate} < ${todayKey(tz)})` }).from(tasks).where(eq(tasks.userId, userId)).then((r) => r[0]),
+    // Both ends are bounded: a review of a past week must not count what happened after it.
+    db.select({
+      done: sql<number>`count(*) filter (where ${tasks.status} = 'done' and ${tasks.completedAt} >= ${range.from}::date and ${tasks.completedAt} < ${range.to}::date + interval '1 day')`,
+      created: sql<number>`count(*) filter (where ${tasks.createdAt} >= ${range.from}::date and ${tasks.createdAt} < ${range.to}::date + interval '1 day')`,
+      donePrev: sql<number>`count(*) filter (where ${tasks.status} = 'done' and ${tasks.completedAt} >= ${prev.from}::date and ${tasks.completedAt} < ${prev.to}::date + interval '1 day')`,
+      createdPrev: sql<number>`count(*) filter (where ${tasks.createdAt} >= ${prev.from}::date and ${tasks.createdAt} < ${prev.to}::date + interval '1 day')`,
+      open: sql<number>`count(*) filter (where ${tasks.status} in ('todo','in_progress'))`,
+      overdue: sql<number>`count(*) filter (where ${tasks.status} in ('todo','in_progress') and ${tasks.dueDate} < ${todayKey(tz)})`,
+    }).from(tasks).where(eq(tasks.userId, userId)).then((r) => r[0]),
     db.select({ active: sql<number>`count(*) filter (where ${goals.status}='active')`, completed: sql<number>`count(*) filter (where ${goals.status}='completed')`, avgProgress: sql<number>`coalesce(avg(${goals.progress}) filter (where ${goals.status}='active'),0)`, completedInRange: sql<number>`count(*) filter (where ${goals.status}='completed' and ${goals.completedAt} >= ${range.from}::date and ${goals.completedAt} <= ${range.to}::date + interval '1 day')`, linked: sql<number>`count(*) filter (where ${goals.metricSource} is not null)`, atRisk: sql<number>`count(*) filter (where ${goals.status}='active' and ${goals.deadline} is not null and ${goals.deadline} < ${todayKey(tz)})` }).from(goals).where(eq(goals.userId, userId)).then((r) => r[0]),
     db.select({ active: sql<number>`count(*) filter (where ${projects.status}='active')`, completed: sql<number>`count(*) filter (where ${projects.status}='completed')`, total: sql<number>`count(*)`, avgProgress: sql<number>`coalesce(avg(${projects.progress}) filter (where ${projects.status}='active'),0)` }).from(projects).where(eq(projects.userId, userId)).then((r) => r[0]),
   ]);
@@ -149,6 +157,8 @@ export async function analyticsOverview(userId: string, periodOrOpts: Period | {
     },
     productivity: {
       done, created, open: Number(taskStats.open), overdue: Number(taskStats.overdue),
+      previous: { done: Number(taskStats.donePrev), created: Number(taskStats.createdPrev) },
+      change: { done: changePct(done, Number(taskStats.donePrev)), created: changePct(created, Number(taskStats.createdPrev)) },
       completionRate: pct(done, created),
       perDay: rangeDays > 0 ? round2(done / rangeDays) : null,
       daily: taskDaily.map((d) => ({ date: d.date, n: Number(d.n) })),

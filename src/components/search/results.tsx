@@ -1,5 +1,5 @@
 "use client";
-import { CheckSquare, CalendarDays, BookOpen, Target, FolderKanban, ClipboardList, Wallet, Apple, Dumbbell, GraduationCap, TrendingUp, CandlestickChart, Sparkles, Bell, Newspaper, Languages, Search as SearchIcon } from "lucide-react";
+import { FileText, CheckSquare, CalendarDays, BookOpen, Target, FolderKanban, ClipboardList, Wallet, Apple, Dumbbell, GraduationCap, TrendingUp, CandlestickChart, Sparkles, Bell, Newspaper, Languages, Search as SearchIcon } from "lucide-react";
 
 /** Wire shape of a hit. `id` is an internal reference: it is used to navigate, never shown. */
 export interface SearchHit {
@@ -24,6 +24,7 @@ export const MODULE_META: Record<string, { label: string; icon: typeof CheckSqua
   trading: { label: "Trading", icon: CandlestickChart },
   academy: { label: "Academy", icon: GraduationCap },
   ai: { label: "Assistant", icon: Sparkles },
+  reviews: { label: "Reviews", icon: FileText },
   notifications: { label: "Notifications", icon: Bell },
   market: { label: "Market news", icon: Newspaper },
   german: { label: "German", icon: Languages },

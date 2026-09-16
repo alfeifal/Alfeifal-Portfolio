@@ -5,7 +5,7 @@ import {
   academyLessons, accounts, aiMemory, assignments, budgets, categories, conversations, events, exams,
   exercises, foods, goals, investmentAccounts, investmentAssets, investmentTransactions, journalEntries,
   marketNews, meals, messages, milestones, notifications, nutritionEntries, planItems, priceAlerts,
-  projects, recurringTransactions, savingsGoals, strategies, studySessions, subjects, tasks, trades,
+  projects, recurringTransactions, reviews, savingsGoals, strategies, studySessions, subjects, tasks, trades,
   tradingAccounts, trainingDays, trainingPlans, transactions, watchlistItems, workoutSessions,
 } from "@/server/db/schema";
 import { UNITS, CONCEPTS, VOCAB } from "@/modules/german/content";
@@ -410,6 +410,23 @@ const SEARCHERS: ((c: Ctx) => Promise<SearchHit[]>)[] = [
     return rows.map((r) => ({ type: "notification", module: "notifications", id: r.id, title: r.title, snippet: snippet(r.body, terms) ?? r.kind, date: iso(r.createdAt), href: r.href ?? "/notifications", score: score(terms, r.title, r.body) }));
   },
 
+  /**
+   * Reviews. The searchable content is the user's own notes and the derived observations — the facts
+   * are numbers, which nobody searches by text. AI insights are searched too, but the snippet says so
+   * only through the hit landing in a review, which is always labelled in the UI.
+   */
+  async ({ terms, per, userId }) => {
+    const rows = await db.select({ id: reviews.id, type: reviews.type, periodStart: reviews.periodStart, periodEnd: reviews.periodEnd, userNotes: reviews.userNotes, observations: reviews.observations, status: reviews.status })
+      .from(reviews)
+      .where(and(eq(reviews.userId, userId), matchAll(terms, [reviews.userNotes, reviews.observations, reviews.aiInsights, reviews.type])))
+      .orderBy(desc(reviews.periodEnd)).limit(per);
+    return rows.map((r) => {
+      const label = r.type === "monthly" ? r.periodStart.slice(0, 7) : `${r.periodStart} → ${r.periodEnd}`;
+      const obs = Array.isArray(r.observations) ? (r.observations as { text?: string }[]).map((o) => o.text ?? "").join(" · ") : "";
+      return { type: "review", module: "reviews", id: r.id, title: `${r.type === "monthly" ? "Monthly" : "Weekly"} review · ${label}`, snippet: snippet(r.userNotes ?? obs, terms), date: r.periodEnd, href: `/reviews?review=${r.id}`, score: score(terms, label, `${r.userNotes ?? ""} ${obs}`) };
+    });
+  },
+
   // ---------------------------------------------------------------- market news (shared, not user data)
   async ({ terms, per }) => {
     const rows = await db.select({ id: marketNews.id, headline: marketNews.headline, source: marketNews.source, url: marketNews.url, summary: marketNews.summary, publishedAt: marketNews.publishedAt })
@@ -470,5 +487,5 @@ export async function globalSearch(
 /** The distinct modules search can return, for the UI's filter chips. */
 export const SEARCH_MODULES = [
   "tasks", "calendar", "journal", "goals", "projects", "planner", "finance", "nutrition",
-  "training", "studies", "investing", "trading", "academy", "ai", "notifications", "market", "german",
+  "training", "studies", "investing", "trading", "academy", "ai", "reviews", "notifications", "market", "german",
 ] as const;
