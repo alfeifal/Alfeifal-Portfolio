@@ -56,8 +56,14 @@ export async function conversationWithMessages(userId: string, id: string) {
 /**
  * Resolves what the assistant should show on mount: the conversation the client points at, or the most
  * recent living one, or nothing. Never throws for a dead pointer — that is the normal "start fresh" path.
+ *
+ * The fallback is restricted to the assistant's own kind. Fast Log is deliberately one-shot — it passes
+ * no conversation id, so each quick note gets its own transcript — but with no filter here the assistant
+ * would adopt that transcript on its next mount simply because it was the most recent, and go on writing
+ * into it. That is how a `quick_entry` conversation ended up holding a ninety-minute assistant chat.
+ * A transcript of another kind can still be opened deliberately from the conversation list.
  */
-export async function resumeConversation(userId: string, preferredId?: string | null) {
+export async function resumeConversation(userId: string, preferredId?: string | null, kind = "assistant") {
   if (preferredId) {
     try {
       return { ...(await conversationWithMessages(userId, preferredId)), resumedFrom: "pointer" as const };
@@ -65,7 +71,7 @@ export async function resumeConversation(userId: string, preferredId?: string | 
       if (!(e instanceof AppError) || (e.status !== 404 && e.status !== 410)) throw e;
     }
   }
-  const latest = await mostRecentActive(userId);
+  const latest = await mostRecentActive(userId, kind);
   if (!latest) return null;
   return { ...(await conversationWithMessages(userId, latest.id)), resumedFrom: "latest" as const };
 }

@@ -11,6 +11,7 @@ import { db } from "@/server/db";
 import { conversations, messages } from "@/server/db/schema";
 import { createEventParser, encodeEvent, type ChatStreamEvent } from "@/server/ai/stream";
 import { chatStream } from "@/server/ai/agent";
+import { GENERIC_AI_ERROR } from "@/server/ai/errors";
 import "@/server/ai/tools";
 
 const hasDb = Boolean(process.env.TEST_DATABASE_URL || process.env.DATABASE_URL);
@@ -161,7 +162,10 @@ d("chat stream over the real agent loop (stand-in model)", () => {
     const early = await collect(chatStream(user, { text: "hello", client: fakeClient([{ fail: "model unavailable" }]) }));
     const err = early.find((e) => e.type === "error");
     expect(err).toMatchObject({ type: "error", partial: false });
-    expect(err?.type === "error" && err.message).toContain("model unavailable");
+    // Phase 3.14: the internal reason stays on the server. This used to assert the opposite — the raw
+    // message went straight to the screen, which is how a provider payload ended up in front of the user.
+    expect(err?.type === "error" && err.message).not.toContain("model unavailable");
+    expect(err?.type === "error" && err.message).toBe(GENERIC_AI_ERROR);
     expect(early.some((e) => e.type === "done")).toBe(false);
 
     const late = await collect(chatStream(user, { text: "hello again", client: fakeClient([{ failAfterText: "Hoy tienes" }]) }));
