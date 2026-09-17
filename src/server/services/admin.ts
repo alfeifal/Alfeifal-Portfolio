@@ -27,6 +27,7 @@ export const adminUserColumns = {
   isActive: users.isActive,
   deactivatedAt: users.deactivatedAt,
   lastLoginAt: users.lastLoginAt,
+  mustChangePassword: users.mustChangePassword,
   timezone: users.timezone,
   currency: users.currency,
   createdAt: users.createdAt,
@@ -64,7 +65,9 @@ export function temporaryPassword() {
 
 export async function createUserAsAdmin(admin: { id: string }, input: z.infer<typeof createUserSchema>, ip?: string | null) {
   const password = input.password ?? temporaryPassword();
-  const user = await insertUser({ email: input.email, name: input.name, password, role: input.role, timezone: input.timezone, currency: input.currency });
+  // The administrator knows this password, whether it was generated here or typed by them, so the
+  // account cannot do anything until it has been replaced.
+  const user = await insertUser({ email: input.email, name: input.name, password, role: input.role, timezone: input.timezone, currency: input.currency, mustChangePassword: true });
   // Same structural defaults a self-registered account gets: categories, a cash account, the German
   // subject, a paper trading account, a watchlist and the training routine template. No activity data,
   // and nothing copied from the administrator.

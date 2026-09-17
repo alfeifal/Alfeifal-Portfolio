@@ -2,7 +2,7 @@
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Badge, Bar, Card, ErrorBox, PageHeader, Spinner, useConfirm } from "@/components/ui";
+import { Badge, Bar, Card, ErrorBox, PageHeader, Spinner, useConfirm, usePrompt } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { api, fmtDate, todayLocal, useApi } from "@/lib/client";
 import type { Goal, Task } from "@/lib/types";
@@ -14,6 +14,7 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
   const router = useRouter();
   const toast = useToast();
   const { confirm, dialog } = useConfirm();
+  const { ask, dialog: promptDialog } = usePrompt();
   const g = useApi<GoalDetail>(`/api/goals/${id}`);
   const [ms, setMs] = useState("");
   const [task, setTask] = useState("");
@@ -51,7 +52,7 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
             <p className="mt-2 text-sm">{d.metricName}: <span className="tnum font-medium">{d.metricCurrent ?? 0} / {d.metricTarget} {d.metricUnit}</span> {d.pace?.atRisk && <Badge tone="warning" className="ml-1">behind pace</Badge>}</p>
             <p className="mt-1 text-xs muted">Tracked automatically from {d.metricSource} ({d.metricKind}, {d.metricPeriod === "total" ? "since created" : `this ${d.metricPeriod}`}){d.pace?.expected != null ? ` · on pace would be ${d.pace.expected} ${d.metricUnit ?? ""}` : ""}. Log the activity and this updates itself.</p>
           </>
-        ) : d.metricName ? <p className="mt-2 text-sm">{d.metricName}: <span className="tnum font-medium">{d.metricCurrent ?? 0} / {d.metricTarget} {d.metricUnit}</span> <button className="link ml-2 text-xs" onClick={async () => { const v = prompt("Current value", String(d.metricCurrent ?? 0)); if (v != null) await patch({ metricCurrent: Number(v) }); }}>update</button></p> : <p className="mt-2 text-sm"><input type="range" min={0} max={100} value={d.progress} onChange={(e) => patch({ progress: Number(e.target.value) })} className="w-full" /></p>}
+        ) : d.metricName ? <p className="mt-2 text-sm">{d.metricName}: <span className="tnum font-medium">{d.metricCurrent ?? 0} / {d.metricTarget} {d.metricUnit}</span> <button className="link ml-2 text-xs" onClick={() => ask(async (v) => { await patch({ metricCurrent: Number(v) }); }, { title: "Update progress", label: `${d.metricName} (${d.metricUnit ?? "value"})`, hint: `Target: ${d.metricTarget}`, type: "number", step: "any", initial: String(d.metricCurrent ?? 0), required: true })}>update</button></p> : <p className="mt-2 text-sm"><input type="range" min={0} max={100} value={d.progress} onChange={(e) => patch({ progress: Number(e.target.value) })} className="w-full" /></p>}
         {d.description && <p className="mt-2 whitespace-pre-wrap text-sm muted">{d.description}</p>}
       </Card>
       <div className="grid gap-3 md:grid-cols-2">
@@ -61,13 +62,14 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
           <form className="mt-2 flex gap-2" onSubmit={async (e) => { e.preventDefault(); if (!ms.trim()) return; await api(`/api/goals/${id}/milestones`, { method: "POST", json: { title: ms } }); setMs(""); g.refresh(); }}><input className="field" placeholder="New milestone" value={ms} onChange={(e) => setMs(e.target.value)} /><button className="btn-ghost">Add</button></form>
         </Card>
         <Card title="Linked tasks">
-          {d.tasks.length === 0 && <p className="text-sm muted">No tasks linked to this goal yet.</p>}
+          {d.tasks.length === 0 && <p className="text-sm muted">No tasks linked to this goal yet. Create a task and pick this goal to have its progress count here.</p>}
           <ul className="divide-y divide-border text-sm">{d.tasks.map((t) => <li key={t.id} className="flex items-center gap-2 py-1.5"><input type="checkbox" checked={t.status === "done"} onChange={async () => { await api(`/api/tasks/${t.id}/complete`, { method: "POST" }); g.refresh(); }} /><span className={"flex-1 " + (t.status === "done" ? "line-through muted" : "")}>{t.title}</span>{t.dueDate && <span className="text-xs muted">{fmtDate(t.dueDate)}</span>}</li>)}</ul>
           <form className="mt-2 flex gap-2" onSubmit={async (e) => { e.preventDefault(); if (!task.trim()) return; await api("/api/tasks", { method: "POST", json: { title: task, goalId: id } }); setTask(""); g.refresh(); }}><input className="field" placeholder="New task for this goal" value={task} onChange={(e) => setTask(e.target.value)} /><button className="btn-ghost">Add</button></form>
           <p className="mt-2 text-xs muted">All tasks: <Link className="link" href="/tasks">Tasks</Link></p>
         </Card>
       </div>
       {dialog}
+      {promptDialog}
     </div>
   );
 }

@@ -36,13 +36,13 @@ export async function createUser(input: z.infer<typeof signupSchema>) {
  * The single place a row lands in `users`. Both sign-up and admin-created accounts go through it, so
  * the password is always hashed with the same function and the email uniqueness check is never skipped.
  */
-export async function insertUser(input: z.infer<typeof signupSchema> & { role?: "admin" | "user" }) {
+export async function insertUser(input: z.infer<typeof signupSchema> & { role?: "admin" | "user"; mustChangePassword?: boolean }) {
   const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, input.email)).limit(1);
   if (existing.length) throw new AppError(409, "An account with this email already exists");
   const passwordHash = await hashPassword(input.password);
   const [u] = await db
     .insert(users)
-    .values({ email: input.email, name: input.name, passwordHash, role: input.role ?? "user", timezone: input.timezone ?? process.env.DEFAULT_TIMEZONE ?? "Europe/Madrid", currency: input.currency ?? process.env.DEFAULT_CURRENCY ?? "EUR" })
+    .values({ email: input.email, name: input.name, passwordHash, role: input.role ?? "user", mustChangePassword: input.mustChangePassword ?? false, timezone: input.timezone ?? process.env.DEFAULT_TIMEZONE ?? "Europe/Madrid", currency: input.currency ?? process.env.DEFAULT_CURRENCY ?? "EUR" })
     .returning();
   return u;
 }
@@ -75,10 +75,20 @@ export async function updateProfile(userId: string, input: z.infer<typeof profil
 }
 
 export const passwordChangeSchema = z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(10).max(200) });
+
+/**
+ * Changing a password also clears `mustChangePassword`: whatever the account was handed at creation
+ * is gone, so the reason for the block is gone with it. Reusing the same password is refused — that
+ * would clear the flag while leaving the shared secret in place.
+ *
+ * Returns whether this was the forced first change, so the caller can say so in the audit trail.
+ */
 export async function changePassword(userId: string, input: z.infer<typeof passwordChangeSchema>) {
   const [u] = await db.select().from(users).where(eq(users.id, userId));
   if (!u || !(await verifyPassword(input.currentPassword, u.passwordHash))) throw new AppError(400, "Current password is incorrect");
-  await db.update(users).set({ passwordHash: await hashPassword(input.newPassword), updatedAt: new Date() }).where(eq(users.id, userId));
+  if (await verifyPassword(input.newPassword, u.passwordHash)) throw new AppError(400, "The new password must be different from the current one");
+  await db.update(users).set({ passwordHash: await hashPassword(input.newPassword), mustChangePassword: false, updatedAt: new Date() }).where(eq(users.id, userId));
+  return { wasForced: u.mustChangePassword };
 }
 
 /** Preferences are a JSON document; patches are shallow-merged per top-level key. */

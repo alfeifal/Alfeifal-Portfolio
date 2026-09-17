@@ -26,7 +26,7 @@ export default function ExercisePage({ params }: { params: Promise<{ id: string 
         <Card title="Top set weight"><MiniLine series={d.series.map((s) => ({ label: s.date.slice(5), v: s.topWeight }))} label="kg" /></Card>
         <Card title="Estimated 1RM (Epley · calculated)"><MiniLine series={d.series.map((s) => ({ label: s.date.slice(5), v: s.est1rm }))} label="1RM" /></Card>
       </div>
-      <Card title="Session log">{d.series.length === 0 ? <p className="text-sm muted">No sets logged yet for this exercise.</p> : <ul className="divide-y divide-border text-sm">{[...d.series].reverse().map((s) => <li key={s.date} className="flex justify-between py-1.5"><span>{fmtDate(s.date)}</span><span className="tnum muted">{s.sets.map((x) => x.seconds ? `${x.seconds}s` : `${x.weightKg ?? 0}×${x.reps ?? 0}`).join(", ")} · vol {fmtNum(s.volume, 0)}</span></li>)}</ul>}</Card>
+      <Card title="Session log">{d.series.length === 0 ? <p className="text-sm muted">No sets logged yet for this exercise — once you log some, your best set and estimated 1RM appear here.</p> : <ul className="divide-y divide-border text-sm">{[...d.series].reverse().map((s) => <li key={s.date} className="flex justify-between py-1.5"><span>{fmtDate(s.date)}</span><span className="tnum muted">{s.sets.map((x) => x.seconds ? `${x.seconds}s` : `${x.weightKg ?? 0}×${x.reps ?? 0}`).join(", ")} · vol {fmtNum(s.volume, 0)}</span></li>)}</ul>}</Card>
     </div>
   );
 }

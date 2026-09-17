@@ -46,6 +46,22 @@ export async function createTradingAccount(userId: string, input: z.infer<typeof
   const [a] = await db.insert(tradingAccounts).values({ ...input, userId }).returning();
   return a;
 }
+export async function getTradingAccount(userId: string, id: string) {
+  const [a] = await db.select().from(tradingAccounts).where(and(eq(tradingAccounts.id, id), eq(tradingAccounts.userId, userId)));
+  if (!a) throw notFound("Trading account");
+  return a;
+}
+/**
+ * Editable because the alternative was deleting the account — which takes its trades with it — just to
+ * fix a name, a starting balance or a risk percentage. `mode` is deliberately not editable: flipping an
+ * account between simulated and real would silently move its whole history across that line.
+ */
+export const tradingAccountUpdateSchema = tradingAccountSchema.omit({ mode: true }).partial();
+export async function updateTradingAccount(userId: string, id: string, input: z.infer<typeof tradingAccountUpdateSchema>) {
+  const [a] = await db.update(tradingAccounts).set(input).where(and(eq(tradingAccounts.id, id), eq(tradingAccounts.userId, userId))).returning();
+  if (!a) throw notFound("Trading account");
+  return a;
+}
 export async function deleteTradingAccount(userId: string, id: string) {
   await db.delete(tradingAccounts).where(and(eq(tradingAccounts.id, id), eq(tradingAccounts.userId, userId)));
 }

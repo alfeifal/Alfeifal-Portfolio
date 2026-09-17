@@ -128,7 +128,10 @@ describe("gaps between a finished backend and the screens", () => {
 
   it("errors on the delete form reach the user instead of a bare alert", () => {
     const settings = read("src/app/(app)/settings/page.tsx");
-    const form = settings.slice(settings.indexOf("/api/me/delete"));
-    expect(form.slice(0, 400)).toContain("toast.error");
+    const form = settings.slice(settings.indexOf("/api/me/delete") - 500, settings.indexOf("/api/me/delete") + 400);
+    // Phase 3.13 moved this onto the shared confirmation, which shows a refusal in place — including
+    // the last-administrator one — instead of the browser's confirm() followed by a toast.
+    expect(form).toContain("confirm(");
+    expect(settings).not.toContain("alert(");
   });
 });

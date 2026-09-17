@@ -194,25 +194,131 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
     </AnimatePresence>
   );
 }
-/** Careful destructive confirmation (replaces window.confirm where used). */
+/**
+ * Careful destructive confirmation (replaces window.confirm where used).
+ *
+ * A failed confirm used to leave the dialog open with no explanation and the rejection unhandled, so
+ * a delete the server refused looked exactly like one that did nothing. The error is shown in place
+ * now, and the dialog stays open so the action can be retried or cancelled.
+ */
 export function ConfirmDialog({ open, onClose, onConfirm, title = "Are you sure?", description, confirmLabel = "Delete", danger = true }: { open: boolean; onClose: () => void; onConfirm: () => Promise<unknown> | void; title?: ReactNode; description?: ReactNode; confirmLabel?: string; danger?: boolean }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Reopening starts clean. Adjusted during render rather than in an effect, so there is no extra
+  // pass showing the previous failure for a frame.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setError(null);
+  }
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onConfirm();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <Modal open={open} onClose={onClose} title={title}>
       {description && <p className="mb-4 text-sm muted">{description}</p>}
+      {error && <p className="mb-3 text-sm text-negative" role="alert">{error}</p>}
       <div className="flex justify-end gap-2">
-        <Button onClick={onClose}>Cancel</Button>
-        <Button variant={danger ? "danger" : "primary"} loading={busy} onClick={async () => { setBusy(true); try { await onConfirm(); onClose(); } finally { setBusy(false); } }}>{confirmLabel}</Button>
+        <Button onClick={onClose} disabled={busy}>Cancel</Button>
+        <Button variant={danger ? "danger" : "primary"} loading={busy} onClick={run}>{confirmLabel}</Button>
       </div>
     </Modal>
   );
 }
 /** Hook-style helper for the common "click → confirm → run" flow. */
 export function useConfirm() {
-  const [state, setState] = useState<{ title?: ReactNode; description?: ReactNode; confirmLabel?: string; run: () => Promise<unknown> | void } | null>(null);
-  const confirm = (run: () => Promise<unknown> | void, opts: { title?: ReactNode; description?: ReactNode; confirmLabel?: string } = {}) => setState({ ...opts, run });
-  const dialog = <ConfirmDialog open={!!state} onClose={() => setState(null)} onConfirm={() => state?.run()} title={state?.title} description={state?.description} confirmLabel={state?.confirmLabel} />;
+  const [state, setState] = useState<{ title?: ReactNode; description?: ReactNode; confirmLabel?: string; danger?: boolean; run: () => Promise<unknown> | void } | null>(null);
+  const confirm = (run: () => Promise<unknown> | void, opts: { title?: ReactNode; description?: ReactNode; confirmLabel?: string; danger?: boolean } = {}) => setState({ ...opts, run });
+  const dialog = <ConfirmDialog open={!!state} onClose={() => setState(null)} onConfirm={() => state?.run()} title={state?.title} description={state?.description} confirmLabel={state?.confirmLabel} danger={state?.danger ?? true} />;
   return { confirm, dialog };
+}
+
+/**
+ * The counterpart of `useConfirm` for "edit one value": a small dialog with a single labelled field.
+ *
+ * It exists because nine places across the app were calling `window.prompt` — unstyled, unvalidated,
+ * with no loading state, no error when the save failed, and unusable on some mobile browsers, while
+ * every other edit in the app is a Modal with a Field. Same shape as `useConfirm`: call `ask` with
+ * what to run, render `dialog` once.
+ */
+export function usePrompt() {
+  type Opts = {
+    title?: ReactNode;
+    label?: ReactNode;
+    hint?: ReactNode;
+    initial?: string;
+    type?: "text" | "number" | "date" | "textarea";
+    placeholder?: string;
+    required?: boolean;
+    step?: string;
+    min?: string;
+    saveLabel?: string;
+  };
+  const [state, setState] = useState<(Opts & { run: (value: string) => Promise<unknown> | void }) | null>(null);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const ask = (run: (value: string) => Promise<unknown> | void, opts: Opts = {}) => {
+    setValue(opts.initial ?? "");
+    setError(null);
+    setBusy(false);
+    setState({ ...opts, run });
+  };
+  const close = () => setState(null);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!state || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await state.run(value);
+      close();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dialog = (
+    <Modal open={!!state} onClose={close} title={state?.title ?? "Edit"}>
+      <form onSubmit={submit} className="space-y-3">
+        <Field label={state?.label ?? state?.title ?? "Value"} hint={state?.hint} error={error}>
+          {state?.type === "textarea" ? (
+            <textarea className="field" rows={4} autoFocus placeholder={state?.placeholder} required={state?.required} value={value} onChange={(e) => setValue(e.target.value)} />
+          ) : (
+            <input
+              className="field"
+              type={state?.type ?? "text"}
+              inputMode={state?.type === "number" ? "decimal" : undefined}
+              step={state?.step}
+              min={state?.min}
+              autoFocus
+              placeholder={state?.placeholder}
+              required={state?.required}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+            />
+          )}
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button type="button" onClick={close} disabled={busy}>Cancel</Button>
+          <Button variant="primary" type="submit" loading={busy}>{state?.saveLabel ?? "Save"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+  return { ask, dialog };
 }
 export function Tooltip({ label, children, side = "right" }: { label: string; children: ReactNode; side?: "right" | "top" | "bottom" }) {
   return (

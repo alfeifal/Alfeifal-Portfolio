@@ -15,7 +15,12 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   let data: unknown = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!res.ok) {
-    const d = data as { error?: string; details?: unknown } | null;
+    const d = data as { error?: string; details?: unknown; code?: string } | null;
+    // An account that still owes a password change gets 403 on everything else. Send it to the one
+    // screen it may use rather than surfacing a refusal it cannot act on.
+    if (res.status === 403 && d?.code === "password_change_required" && typeof window !== "undefined" && location.pathname !== "/change-password") {
+      window.location.assign("/change-password");
+    }
     throw new ApiError(res.status, d?.error ?? `Request failed (${res.status})`, d?.details);
   }
   return data as T;

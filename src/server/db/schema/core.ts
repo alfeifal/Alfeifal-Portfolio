@@ -20,6 +20,12 @@ export const users = pgTable("users", {
   isActive: boolean("is_active").notNull().default(true),
   deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  /**
+   * Set when an administrator creates the account: the password they handed over is a shared secret
+   * by construction, so it has to be replaced before the account can be used for anything else.
+   * Existing accounts are never flagged, so nobody is locked out by the migration that adds this.
+   */
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   timezone: text("timezone").notNull().default("Europe/Madrid"),
   currency: text("currency").notNull().default("EUR"),
   locale: text("locale").notNull().default("es-ES"),

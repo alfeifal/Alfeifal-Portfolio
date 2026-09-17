@@ -38,6 +38,21 @@ export async function createInvestmentAccount(userId: string, input: z.infer<typ
   const [a] = await db.insert(investmentAccounts).values({ ...input, userId }).returning();
   return a;
 }
+export async function getInvestmentAccount(userId: string, id: string) {
+  const [a] = await db.select().from(investmentAccounts).where(and(eq(investmentAccounts.id, id), eq(investmentAccounts.userId, userId)));
+  if (!a) throw notFound("Investment account");
+  return a;
+}
+/**
+ * Name, broker and currency are editable. `cashBalance` is not: it is derived from the transactions,
+ * so letting it be set here would put the account's own history and its balance out of step.
+ */
+export const invAccountUpdateSchema = invAccountSchema.omit({ cashBalance: true }).partial();
+export async function updateInvestmentAccount(userId: string, id: string, input: z.infer<typeof invAccountUpdateSchema>) {
+  const [a] = await db.update(investmentAccounts).set(input).where(and(eq(investmentAccounts.id, id), eq(investmentAccounts.userId, userId))).returning();
+  if (!a) throw notFound("Investment account");
+  return a;
+}
 export async function deleteInvestmentAccount(userId: string, id: string) {
   await db.delete(investmentAccounts).where(and(eq(investmentAccounts.id, id), eq(investmentAccounts.userId, userId)));
 }

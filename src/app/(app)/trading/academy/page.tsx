@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useToast } from "@/components/toast";
-import { Badge, Card, Empty, ErrorBox, Field, Markdown, Modal, PageHeader, Spinner, Source } from "@/components/ui";
+import { Badge, Card, Empty, ErrorBox, Field, Markdown, Modal, PageHeader, Spinner, Source, useConfirm } from "@/components/ui";
 import { api, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 
@@ -13,6 +13,7 @@ export default function AcademyPage() {
   const { aiConfigured } = useShell();
   const toast = useToast();
   const lessons = useApi<Lesson[]>("/api/academy/lessons");
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [open, setOpen] = useState<Lesson | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [result, setResult] = useState<number | null>(null);
@@ -63,7 +64,7 @@ export default function AcademyPage() {
         <div className="grid gap-3 md:grid-cols-2">
           {TOPICS.map(([id, name]) => { const ls = lessons.data!.filter((l) => l.topic === id); const done = ls.filter((l) => l.progress?.completedAt).length; return (
             <Card key={id} title={name} action={<div className="flex items-center gap-2 text-xs muted">{done}/{ls.length}{aiConfigured && <button className="btn-ghost btn-sm" disabled={busy} onClick={() => generate(id)}>AI lesson</button>}</div>}>
-              {ls.length === 0 ? <p className="text-sm muted">No lessons yet.</p> : <ul className="divide-y divide-border text-sm">{ls.map((l) => <li key={l.id} className="flex items-center gap-2 py-1.5"><button className="flex-1 text-left hover:underline" onClick={() => { setOpen(l); setAnswers({}); setResult(null); }}>{l.title}</button><Source source={l.source} />{l.progress?.bestScore != null && <Badge tone={l.progress.completedAt ? "positive" : "warning"}>{l.progress.bestScore}%</Badge>}</li>)}</ul>}
+              {ls.length === 0 ? <p className="text-sm muted">No lessons in this topic yet.</p> : <ul className="divide-y divide-border text-sm">{ls.map((l) => <li key={l.id} className="flex items-center gap-2 py-1.5"><button className="flex-1 text-left hover:underline" onClick={() => { setOpen(l); setAnswers({}); setResult(null); }}>{l.title}</button><Source source={l.source} />{l.progress?.bestScore != null && <Badge tone={l.progress.completedAt ? "positive" : "warning"}>{l.progress.bestScore}%</Badge>}</li>)}</ul>}
             </Card>); })}
         </div>
       )}
@@ -73,7 +74,7 @@ export default function AcademyPage() {
           <Markdown text={open.content} />
           {open.quiz.length > 0 && <div className="card p-3"><p className="mb-2 font-semibold">Quiz</p>{open.quiz.map((q, i) => <div key={i} className="mb-3"><p className="text-sm font-medium">{i + 1}. {q.q}</p><div className="mt-1 grid gap-1">{q.options.map((o, k) => <button key={k} className={"rounded-lg border px-2 py-1 text-left text-sm " + (answers[i] === k ? "border-accent bg-accent text-accent-fg" : "border-border") + (result != null && k === q.answer ? " !border-positive" : "")} onClick={() => result == null && setAnswers({ ...answers, [i]: k })}>{o}</button>)}</div>{result != null && q.explanation && <p className="mt-1 text-xs muted">{q.explanation}</p>}</div>)}{result == null ? <button className="btn-primary btn-sm" disabled={Object.keys(answers).length < open.quiz.length} onClick={submitQuiz}>Submit</button> : <p className="text-sm font-semibold">Score: {result}% {result >= 70 ? "· passed" : "· review and retry"}</p>}</div>}
           <NotesEditor lesson={open} onSaved={lessons.refresh} />
-          <button className="btn-ghost btn-sm text-negative" onClick={async () => { if (confirm("Delete lesson?")) { await api(`/api/academy/lessons/${open.id}`, { method: "DELETE" }); setOpen(null); lessons.refresh(); } }}>Delete lesson</button>
+          <button className="btn-ghost btn-sm text-negative" onClick={() => confirm(async () => { await api(`/api/academy/lessons/${open.id}`, { method: "DELETE" }); setOpen(null); lessons.refresh(); toast.success("Lesson deleted", open.title); }, { title: "Delete this lesson?", description: open.title })}>Delete lesson</button>
         </div>}
       </Modal>
       <Modal open={modal} onClose={() => setModal(false)} title="New lesson" wide>
@@ -85,6 +86,7 @@ export default function AcademyPage() {
           <div className="flex justify-end"><button className="btn-primary">Save</button></div>
         </form>
       </Modal>
+      {confirmDialog}
     </div>
   );
 }

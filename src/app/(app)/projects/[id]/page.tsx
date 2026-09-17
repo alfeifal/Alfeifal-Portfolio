@@ -45,7 +45,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
         </Card>
         <div className="space-y-3">
           <Card title="Milestones">
-            {d.milestones.length === 0 && <p className="text-sm muted">No milestones yet.</p>}
+            {d.milestones.length === 0 && <p className="text-sm muted">No milestones yet. Add checkpoints to track the project by stages instead of by task count.</p>}
             <ul className="divide-y divide-border text-sm">{d.milestones.map((m) => <li key={m.id} className="flex items-center gap-2 py-1.5"><input type="checkbox" checked={!!m.completedAt} onChange={async (e) => { await api(`/api/milestones/${m.id}`, { method: "PATCH", json: { done: e.target.checked } }); p.refresh(); }} /><span className={"flex-1 " + (m.completedAt ? "line-through muted" : "")}>{m.title}</span>{m.dueDate && <span className={"text-xs " + (!m.completedAt && m.dueDate < todayLocal() ? "text-negative" : "muted")}>{fmtDate(m.dueDate)}</span>}</li>)}</ul>
             <form className="mt-2 flex gap-2" onSubmit={async (e) => { e.preventDefault(); if (!ms.trim()) return; await api(`/api/projects/${id}/milestones`, { method: "POST", json: { title: ms } }); setMs(""); p.refresh(); }}><input className="field" placeholder="New milestone" value={ms} onChange={(e) => setMs(e.target.value)} /><button className="btn-ghost">Add</button></form>
           </Card>

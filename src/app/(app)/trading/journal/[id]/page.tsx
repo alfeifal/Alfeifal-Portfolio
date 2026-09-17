@@ -1,7 +1,8 @@
 "use client";
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, Card, ErrorBox, Field, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Card, ErrorBox, Field, PageHeader, Spinner, useConfirm } from "@/components/ui";
+import { useToast } from "@/components/toast";
 import { api, fmtDate, fmtMoney, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 
@@ -12,6 +13,8 @@ export default function TradePage({ params }: { params: Promise<{ id: string }> 
   const { user } = useShell();
   const router = useRouter();
   const t = useApi<Trade>(`/api/trading/trades/${id}`);
+  const toast = useToast();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [form, setForm] = useState<Record<string, string> | null>(null);
   const [error, setError] = useState("");
   const d = t.data;
@@ -25,7 +28,7 @@ export default function TradePage({ params }: { params: Promise<{ id: string }> 
   if (!d) return <Spinner />;
   return (
     <div className="space-y-4">
-      <PageHeader back={{ href: "/trading", label: "Trading" }} title={<>{d.symbol} <Badge tone={d.direction === "long" ? "positive" : "negative"}>{d.direction}</Badge> <Badge tone={d.mode === "real" ? "warning" : "muted"}>{d.mode === "real" ? "REAL" : "SIMULATED"}</Badge> <Badge>{d.status}</Badge></>} subtitle={`${d.assetClass}${d.timeframe ? " · " + d.timeframe : ""}${d.setup ? " · " + d.setup : ""} · opened ${fmtDate(d.openedAt)}${d.closedAt ? " · closed " + fmtDate(d.closedAt) : ""}`} action={<><button className="btn-ghost btn-sm" onClick={startEdit}>Edit / close</button><button className="btn-ghost btn-sm text-negative" onClick={async () => { if (confirm("Delete trade?")) { await api(`/api/trading/trades/${id}`, { method: "DELETE" }); router.push("/trading"); } }}>Delete</button></>} />
+      <PageHeader back={{ href: "/trading", label: "Trading" }} title={<>{d.symbol} <Badge tone={d.direction === "long" ? "positive" : "negative"}>{d.direction}</Badge> <Badge tone={d.mode === "real" ? "warning" : "muted"}>{d.mode === "real" ? "REAL" : "SIMULATED"}</Badge> <Badge>{d.status}</Badge></>} subtitle={`${d.assetClass}${d.timeframe ? " · " + d.timeframe : ""}${d.setup ? " · " + d.setup : ""} · opened ${fmtDate(d.openedAt)}${d.closedAt ? " · closed " + fmtDate(d.closedAt) : ""}`} action={<><button className="btn-ghost btn-sm" onClick={startEdit}>Edit / close</button><button className="btn-ghost btn-sm text-negative" onClick={() => confirm(async () => { await api(`/api/trading/trades/${id}`, { method: "DELETE" }); toast.success("Trade deleted", d.symbol); router.push("/trading"); }, { title: "Delete this trade?", description: `${d.symbol} ${d.direction} · it disappears from your ${d.mode === "real" ? "real" : "simulated"} statistics.` })}>Delete</button></>} />
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         {[["Entry", d.entryPrice], ["Exit", d.exitPrice], ["Stop", d.stopLoss], ["Target", d.target], ["Quantity", d.quantity], ["Risk", d.riskAmount != null ? fmtMoney(d.riskAmount, user.currency) : null], ["P&L", d.pnl != null ? fmtMoney(d.pnl, user.currency) : null], ["R multiple", d.rMultiple != null ? `${d.rMultiple}R` : null]].map(([k, v]) => <div key={String(k)} className="card p-3"><p className="text-xs muted">{k}</p><p className={"font-semibold tnum " + (k === "P&L" && d.pnl != null ? (d.pnl >= 0 ? "text-positive" : "text-negative") : "")}>{v ?? "—"}</p></div>)}
       </div>
@@ -53,6 +56,7 @@ export default function TradePage({ params }: { params: Promise<{ id: string }> 
           <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={() => setForm(null)}>Cancel</button><button className="btn-primary">Save</button></div>
         </form>
       )}
+      {confirmDialog}
     </div>
   );
 }

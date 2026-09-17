@@ -28,6 +28,13 @@ defineTool({
   run: (i, ctx) => tr.createTradingAccount(ctx.user.id, i),
 });
 defineTool({
+  name: "update_trading_account", module: "trading", risk: "low",
+  description: "Edit a trading account by id: name, broker, currency, starting balance or risk per trade. The real/simulated mode cannot be changed — that would move its history across that line.",
+  schema: z.object({ id: z.string().uuid() }).extend(tr.tradingAccountUpdateSchema.shape),
+  summarize: (i) => `update_trading_account — ${i.name ?? i.id.slice(0, 8)}`,
+  run: ({ id, ...rest }, ctx) => tr.updateTradingAccount(ctx.user.id, id, rest),
+});
+defineTool({
   name: "delete_trading_account", module: "trading", risk: "high",
   description: "Delete a trading account and every trade recorded in it. Always confirmed, and the account's exact name must be given so a real-money history cannot be wiped by mistake.",
   schema: z.object({ id: z.string().uuid(), name: z.string().min(1).max(100).describe("The account's exact name, for the confirmation") }),

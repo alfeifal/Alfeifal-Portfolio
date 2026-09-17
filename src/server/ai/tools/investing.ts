@@ -20,6 +20,13 @@ defineTool({
   run: (i, ctx) => inv.createInvestmentAccount(ctx.user.id, i),
 });
 defineTool({
+  name: "update_investment_account", module: "investing", risk: "low",
+  description: "Edit an investment account by id: name, broker or currency. The cash balance is derived from its transactions and cannot be set here.",
+  schema: z.object({ id: z.string().uuid() }).extend(inv.invAccountUpdateSchema.shape),
+  summarize: (i) => `update_investment_account — ${i.name ?? i.id.slice(0, 8)}`,
+  run: ({ id, ...rest }, ctx) => inv.updateInvestmentAccount(ctx.user.id, id, rest),
+});
+defineTool({
   name: "delete_investment_account", module: "investing", risk: "high",
   description: "Delete an investment account. Every transaction inside it is deleted with it and the portfolio changes. Always confirmed, and the account's exact name must be given.",
   schema: z.object({ id: z.string().uuid(), name: z.string().min(1).max(100).describe("The account's exact name, for the confirmation") }),

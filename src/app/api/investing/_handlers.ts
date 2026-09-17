@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { crud, query } from "@/server/crud";
 import * as inv from "@/server/services/investing";
-export const accounts = crud({ name: "investing.accounts", createSchema: inv.invAccountSchema, updateSchema: z.object({}), list: (u) => inv.listInvestmentAccounts(u.id), create: (u, i) => inv.createInvestmentAccount(u.id, i), remove: (u, id) => inv.deleteInvestmentAccount(u.id, id) });
+export const accounts = crud({ name: "investing.accounts", createSchema: inv.invAccountSchema, updateSchema: inv.invAccountUpdateSchema, list: (u) => inv.listInvestmentAccounts(u.id), get: (u, id) => inv.getInvestmentAccount(u.id, id), create: (u, i) => inv.createInvestmentAccount(u.id, i), update: (u, id, i) => inv.updateInvestmentAccount(u.id, id, i), remove: (u, id) => inv.deleteInvestmentAccount(u.id, id) });
 export const assets = crud({ name: "investing.assets", createSchema: inv.invAssetSchema, updateSchema: inv.invAssetSchema.partial(), list: (u) => inv.listAssets(u.id), create: (u, i) => inv.createAsset(u.id, i), update: (u, id, i) => inv.updateAsset(u.id, id, i), remove: (u, id) => inv.deleteAsset(u.id, id) });
 export const transactions = crud({ name: "investing.transactions", createSchema: inv.invTxSchema, updateSchema: z.object({}), list: (u, req) => inv.listInvestmentTransactions(u.id, Number(query(req).limit ?? 200)), create: (u, i) => inv.createInvestmentTransaction(u.id, i, u.timezone), remove: (u, id) => inv.deleteInvestmentTransaction(u.id, id) });

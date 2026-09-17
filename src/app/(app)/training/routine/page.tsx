@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
-import { Badge, Card, ErrorBox, Field, Modal, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Card, ErrorBox, Field, Modal, PageHeader, Spinner, useConfirm, usePrompt } from "@/components/ui";
+import { useToast } from "@/components/toast";
 import { api, useApi } from "@/lib/client";
 
 interface Plan { id: string; name: string; description: string | null; cycleLength: number; startDate: string; rules: Record<string, unknown>; days: { id: string; dayIndex: number; name: string; focus: string[]; isRest: boolean; notes: string | null; exercises: { id: string; position: number; sets: number; reps: string; intensity: string | null; loadNote: string | null; restNote: string | null; restSeconds: number | null; notes: string | null; exercise: { name: string; anatomicalTarget: string | null } }[] }[] }
@@ -8,14 +9,29 @@ interface Plan { id: string; name: string; description: string | null; cycleLeng
 /** The routine, exactly as imported from the attached document, editable (spec §17). */
 export default function RoutinePage() {
   const plan = useApi<Plan>("/api/training/plan");
+  const toast = useToast();
+  const { ask, dialog: promptDialog } = usePrompt();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [adding, setAdding] = useState<string | null>(null);
   const [form, setForm] = useState({ exerciseName: "", sets: "3", reps: "8–10", intensity: "MODERADO", loadNote: "", restSeconds: "90" });
   const [error, setError] = useState("");
   const p = plan.data;
-  const setStart = async () => { const v = prompt("Cycle start date (YYYY-MM-DD). Day 1 (Push) falls on this date.", p?.startDate); if (!v || !p) return; await api("/api/training/plan", { method: "PATCH", json: { id: p.id, startDate: v } }); plan.refresh(); };
+  const setStart = () => {
+    if (!p) return;
+    ask(async (v) => { await api("/api/training/plan", { method: "PATCH", json: { id: p.id, startDate: v } }); plan.refresh(); toast.success("Cycle start updated", v); },
+      { title: "Cycle start date", label: "First day of the cycle", hint: "Day 1 (Push) falls on this date.", type: "date", initial: p.startDate, required: true });
+  };
   const add = async (e: React.FormEvent) => { e.preventDefault(); if (!adding) return; setError(""); try { await api(`/api/training/days/${adding}/exercises`, { method: "POST", json: { exerciseName: form.exerciseName, sets: Number(form.sets), reps: form.reps, intensity: form.intensity, loadNote: form.loadNote || null, restSeconds: Number(form.restSeconds) } }); setAdding(null); plan.refresh(); } catch (err) { setError((err as Error).message); } };
-  const edit = async (id: string, field: "sets" | "reps" | "loadNote" | "restSeconds", current: string) => { const v = prompt(`New ${field}`, current); if (v == null) return; await api(`/api/training/day-exercises/${id}`, { method: "PATCH", json: { [field]: field === "sets" || field === "restSeconds" ? Number(v) : v } }); plan.refresh(); };
-  const remove = async (id: string) => { if (!confirm("Remove this exercise from the routine?")) return; await api(`/api/training/day-exercises/${id}`, { method: "DELETE" }); plan.refresh(); };
+  const LABELS = { sets: "Sets", reps: "Reps", loadNote: "Load note", restSeconds: "Rest (seconds)" } as const;
+  const edit = (id: string, field: "sets" | "reps" | "loadNote" | "restSeconds", current: string) => {
+    const numeric = field === "sets" || field === "restSeconds";
+    ask(async (v) => { await api(`/api/training/day-exercises/${id}`, { method: "PATCH", json: { [field]: numeric ? Number(v) : v } }); plan.refresh(); toast.success(`${LABELS[field]} updated`); },
+      { title: LABELS[field], label: LABELS[field], type: numeric ? "number" : "text", initial: current, required: numeric, min: "0" });
+  };
+  const remove = (id: string, name: string) => confirm(
+    async () => { await api(`/api/training/day-exercises/${id}`, { method: "DELETE" }); plan.refresh(); toast.success("Exercise removed", name); },
+    { title: "Remove from the routine?", description: `${name} stops appearing on this day. Sets you already logged are kept.`, confirmLabel: "Remove" },
+  );
   const map = (p?.rules.anatomicalMap ?? []) as { group: string; parts: [string, string][] }[];
   return (
     <div className="space-y-4">
@@ -28,7 +44,7 @@ export default function RoutinePage() {
           <div className="grid gap-3 md:grid-cols-2">
             {p.days.map((d) => (
               <Card key={d.id} title={`D${d.dayIndex + 1} · ${d.name}`} action={!d.isRest && <button className="btn-ghost btn-sm" onClick={() => { setAdding(d.id); setError(""); }}>+ Exercise</button>}>
-                {d.isRest ? <p className="text-sm">{d.notes}</p> : <><p className="mb-2 text-xs muted">{d.focus.join(" · ")}</p><ol className="divide-y divide-border text-sm">{d.exercises.map((e) => <li key={e.id} className="py-1.5"><div className="flex items-start gap-2"><span className="w-5 shrink-0 text-xs muted">{e.position}</span><div className="min-w-0 flex-1"><p className="font-medium">{e.exercise.name}</p><p className="text-xs muted">{e.exercise.anatomicalTarget}</p><p className="text-xs"><button className="link" onClick={() => edit(e.id, "sets", String(e.sets))}>{e.sets} sets</button> × <button className="link" onClick={() => edit(e.id, "reps", e.reps)}>{e.reps}</button> · {e.intensity && <Badge tone={e.intensity === "PESADO" ? "negative" : e.intensity === "MODERADO" ? "warning" : "muted"}>{e.intensity}</Badge>} <button className="link" onClick={() => edit(e.id, "loadNote", e.loadNote ?? "")}>{e.loadNote || "load?"}</button> · rest <button className="link" onClick={() => edit(e.id, "restSeconds", String(e.restSeconds ?? 60))}>{e.restNote ?? `${e.restSeconds} s`}</button></p></div><button className="btn-ghost btn-sm" onClick={() => remove(e.id)}>✕</button></div></li>)}</ol></>}
+                {d.isRest ? <p className="text-sm">{d.notes}</p> : <><p className="mb-2 text-xs muted">{d.focus.join(" · ")}</p><ol className="divide-y divide-border text-sm">{d.exercises.map((e) => <li key={e.id} className="py-1.5"><div className="flex items-start gap-2"><span className="w-5 shrink-0 text-xs muted">{e.position}</span><div className="min-w-0 flex-1"><p className="font-medium">{e.exercise.name}</p><p className="text-xs muted">{e.exercise.anatomicalTarget}</p><p className="text-xs"><button className="link" onClick={() => edit(e.id, "sets", String(e.sets))}>{e.sets} sets</button> × <button className="link" onClick={() => edit(e.id, "reps", e.reps)}>{e.reps}</button> · {e.intensity && <Badge tone={e.intensity === "PESADO" ? "negative" : e.intensity === "MODERADO" ? "warning" : "muted"}>{e.intensity}</Badge>} <button className="link" onClick={() => edit(e.id, "loadNote", e.loadNote ?? "")}>{e.loadNote || "load?"}</button> · rest <button className="link" onClick={() => edit(e.id, "restSeconds", String(e.restSeconds ?? 60))}>{e.restNote ?? `${e.restSeconds} s`}</button></p></div><button className="btn-ghost btn-sm" onClick={() => remove(e.id, e.exercise.name)}>✕</button></div></li>)}</ol></>}
               </Card>
             ))}
           </div>
@@ -44,6 +60,8 @@ export default function RoutinePage() {
           <div className="flex justify-end"><button className="btn-primary">Add</button></div>
         </form>
       </Modal>
+      {promptDialog}
+      {confirmDialog}
     </div>
   );
 }

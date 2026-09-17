@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useToast } from "@/components/toast";
 import Link from "next/link";
-import { Badge, Bar, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Tabs, Button, SkeletonList, SkeletonCards, useConfirm } from "@/components/ui";
+import { Badge, Bar, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Tabs, Button, SkeletonList, SkeletonCards, useConfirm, usePrompt } from "@/components/ui";
 import { api, fmtDate, todayLocal, useApi } from "@/lib/client";
 import { MiniBars } from "@/components/charts";
 import { initialParam } from "@/lib/urlparam";
@@ -16,6 +16,7 @@ interface Exam { id: string; title: string; date: string; subjectName: string | 
 export default function StudiesPage() {
   const toast = useToast();
   const { confirm, dialog } = useConfirm();
+  const { ask, dialog: promptDialog } = usePrompt();
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<"overview" | "sessions" | "deadlines" | "subjects">(() => initialParam("tab", ["overview", "sessions", "deadlines", "subjects"] as const, "overview"));
   const subjects = useApi<Subject[]>("/api/studies/subjects");
@@ -51,7 +52,7 @@ export default function StudiesPage() {
           <div className="grid gap-3 md:grid-cols-2">
             <Card title="This week">
               <p className="text-2xl font-semibold tnum">{week.data.totalMinutes} min</p>
-              <ul className="mt-2 space-y-2">{week.data.bySubject.map((s) => <li key={s.name}><div className="flex justify-between text-sm"><span>{s.name} <span className="muted">· {s.sessions} sessions · {s.days} days</span></span><span className="tnum">{s.minutes}{s.weeklyGoalMinutes ? ` / ${s.weeklyGoalMinutes}` : ""} min</span></div>{s.weeklyGoalMinutes ? <Bar value={s.minutes / s.weeklyGoalMinutes} tone="positive" h={4} /> : null}</li>)}{week.data.bySubject.length === 0 && <p className="text-sm muted">No sessions this week.</p>}</ul>
+              <ul className="mt-2 space-y-2">{week.data.bySubject.map((s) => <li key={s.name}><div className="flex justify-between text-sm"><span>{s.name} <span className="muted">· {s.sessions} sessions · {s.days} days</span></span><span className="tnum">{s.minutes}{s.weeklyGoalMinutes ? ` / ${s.weeklyGoalMinutes}` : ""} min</span></div>{s.weeklyGoalMinutes ? <Bar value={s.minutes / s.weeklyGoalMinutes} tone="positive" h={4} /> : null}</li>)}{week.data.bySubject.length === 0 && <p className="text-sm muted">No sessions this week yet — log one and it counts towards the subject&apos;s weekly goal.</p>}</ul>
             </Card>
             <Card title="Last 28 days · minutes per day"><MiniBars series={progress.data.daily.map((d) => ({ label: d.date.slice(5), a: d.minutes }))} labels={["minutes"]} /></Card>
           </div>
@@ -69,7 +70,7 @@ export default function StudiesPage() {
           <Card title="Assignments" action={<button className="btn-primary btn-sm" onClick={() => { setForm({}); setModal("assignment"); }}>+ Assignment</button>}>{!assignments.data?.length ? <p className="text-sm muted">None pending.</p> : <ul className="divide-y divide-border text-sm">{assignments.data.map((a) => <li key={a.id} className="flex items-center gap-2 py-1.5"><button className="h-4 w-4 rounded border border-border hover:bg-positive/20" onClick={async () => { await api(`/api/studies/assignments/${a.id}`, { method: "PATCH", json: { completed: true } }); all(); }} aria-label="Complete" /><span className="flex-1">{a.title} <span className="muted">· {a.subjectName ?? "—"}</span></span><span className="muted">{a.dueDate ? fmtDate(a.dueDate) : ""}</span></li>)}</ul>}</Card>
         </div>
       )}
-      {tab === "subjects" && <Card title="Subjects" action={<button className="btn-primary btn-sm" onClick={() => { setForm({ kind: "subject" }); setModal("subject"); }}>+ Subject</button>}><ul className="divide-y divide-border text-sm">{subjects.data?.map((s) => <li key={s.id} className="flex items-center gap-2 py-1.5"><span className="flex-1">{s.name} <Badge>{s.kind}</Badge>{s.slug === "german" && <Badge tone="accent" className="ml-1">linked module</Badge>}</span><span className="muted">{s.weeklyGoalMinutes ? `${s.weeklyGoalMinutes} min/week` : ""}</span><button className="btn-ghost btn-sm" onClick={async () => { const v = prompt("Weekly goal (minutes)", String(s.weeklyGoalMinutes ?? "")); if (v == null) return; await api(`/api/studies/subjects/${s.id}`, { method: "PATCH", json: { weeklyGoalMinutes: v ? Number(v) : null } }); all(); }}>goal</button>{s.slug !== "german" && <button className="btn-ghost btn-sm" onClick={() => confirm(async () => { await api(`/api/studies/subjects/${s.id}`, { method: "DELETE" }); toast.success("Subject deleted"); all(); }, { title: "Delete subject?", description: s.name })}>✕</button>}</li>)}</ul></Card>}
+      {tab === "subjects" && <Card title="Subjects" action={<button className="btn-primary btn-sm" onClick={() => { setForm({ kind: "subject" }); setModal("subject"); }}>+ Subject</button>}><ul className="divide-y divide-border text-sm">{subjects.data?.map((s) => <li key={s.id} className="flex items-center gap-2 py-1.5"><span className="flex-1">{s.name} <Badge>{s.kind}</Badge>{s.slug === "german" && <Badge tone="accent" className="ml-1">linked module</Badge>}</span><span className="muted">{s.weeklyGoalMinutes ? `${s.weeklyGoalMinutes} min/week` : ""}</span><button className="btn-ghost btn-sm" onClick={() => ask(async (v) => { await api(`/api/studies/subjects/${s.id}`, { method: "PATCH", json: { weeklyGoalMinutes: v ? Number(v) : null } }); all(); toast.success("Weekly goal updated", s.name); }, { title: `${s.name} weekly goal`, label: "Minutes per week", hint: "Leave it empty for no goal.", type: "number", step: "5", min: "0", initial: String(s.weeklyGoalMinutes ?? "") })}>goal</button>{s.slug !== "german" && <button className="btn-ghost btn-sm" onClick={() => confirm(async () => { await api(`/api/studies/subjects/${s.id}`, { method: "DELETE" }); toast.success("Subject deleted"); all(); }, { title: "Delete subject?", description: s.name })}>✕</button>}</li>)}</ul></Card>}
       <Modal open={modal !== null} onClose={() => setModal(null)} title={modal === "session" ? "Log study session" : modal === "subject" ? "New subject" : modal === "assignment" ? "New assignment" : "New exam"}>
         <form onSubmit={submit} className="space-y-3">
           {modal === "session" && <>{subjectSelect}<div className="grid grid-cols-2 gap-2"><Field label="Date"><input className="field" type="date" required value={form.date ?? ""} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field><Field label="Minutes"><input className="field" type="number" min={1} required value={form.durationMinutes ?? ""} onChange={(e) => setForm({ ...form, durationMinutes: e.target.value })} /></Field></div><Field label="Topic"><input className="field" value={form.topic ?? ""} onChange={(e) => setForm({ ...form, topic: e.target.value })} /></Field></>}
@@ -81,6 +82,7 @@ export default function StudiesPage() {
         </form>
       </Modal>
       {dialog}
+      {promptDialog}
     </div>
   );
 }

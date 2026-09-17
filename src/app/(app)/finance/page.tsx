@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, m } from "motion/react";
 import { T } from "@/components/motion";
 import { useToast } from "@/components/toast";
-import { Badge, Bar, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Stat, Tabs, Source, Button, SkeletonStats, SkeletonList, useConfirm } from "@/components/ui";
+import { Badge, Bar, Card, Empty, ErrorBox, Field, Modal, PageHeader, Spinner, Stat, Tabs, Source, Button, SkeletonStats, SkeletonList, useConfirm, usePrompt } from "@/components/ui";
 import { api, fmtDate, fmtMoney, todayLocal, useApi } from "@/lib/client";
 import { useShell } from "@/components/shell/Shell";
 import type { Transaction } from "@/lib/types";
@@ -24,6 +24,7 @@ export default function FinancePage() {
   const { user } = useShell();
   const toast = useToast();
   const { confirm, dialog } = useConfirm();
+  const { ask, dialog: promptDialog } = usePrompt();
   const [saving, setSaving] = useState(false);
   const cur = user.currency;
   const [tab, setTab] = useState<"overview" | "transactions" | "budgets" | "accounts" | "recurring" | "savings">(() => initialParam("tab", ["overview", "transactions", "budgets", "accounts", "recurring", "savings"] as const, "overview"));
@@ -74,13 +75,13 @@ export default function FinancePage() {
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <Card title="Spending by category">
-              {s.byCategory.length === 0 ? <p className="text-sm muted">No expenses this month.</p> : <ul className="space-y-2">{s.byCategory.map((c) => <li key={c.name}><div className="flex justify-between text-sm"><span>{c.name} <span className="muted">· {c.count}</span></span><span className="tnum">{fmtMoney(c.total, cur)}</span></div><Bar value={s.expenses ? c.total / s.expenses : 0} tone="negative" h={4} /></li>)}</ul>}
+              {s.byCategory.length === 0 ? <p className="text-sm muted">No expenses this month yet — the breakdown by category appears as you log them.</p> : <ul className="space-y-2">{s.byCategory.map((c) => <li key={c.name}><div className="flex justify-between text-sm"><span>{c.name} <span className="muted">· {c.count}</span></span><span className="tnum">{fmtMoney(c.total, cur)}</span></div><Bar value={s.expenses ? c.total / s.expenses : 0} tone="negative" h={4} /></li>)}</ul>}
             </Card>
             <Card title="Income vs expenses · last months">
               {s.monthly.length ? <MiniBars series={s.monthly.map((m) => ({ label: m.month.slice(5), a: m.income, b: m.expenses }))} labels={["Income", "Expenses"]} format={(v) => fmtMoney(v, cur)} /> : <p className="text-sm muted">Not enough history.</p>}
             </Card>
             <Card title="Budgets" action={<button className="btn-ghost btn-sm" onClick={() => setTab("budgets")}>Manage</button>}>
-              {s.budgets.length === 0 ? <p className="text-sm muted">No budgets set.</p> : <ul className="space-y-2">{s.budgets.map((b) => <li key={b.id}><div className="flex justify-between text-sm"><span>{b.name}</span><span className="tnum">{fmtMoney(b.spent, cur)} / {fmtMoney(b.amount, cur)}</span></div><Bar value={b.amount ? b.spent / b.amount : 0} tone={b.pct > 100 ? "negative" : b.pct > 80 ? "warning" : "positive"} h={4} /></li>)}</ul>}
+              {s.budgets.length === 0 ? <p className="text-sm muted">No budgets set. Add one per category, or a single total, to see how much of it you have spent.</p> : <ul className="space-y-2">{s.budgets.map((b) => <li key={b.id}><div className="flex justify-between text-sm"><span>{b.name}</span><span className="tnum">{fmtMoney(b.spent, cur)} / {fmtMoney(b.amount, cur)}</span></div><Bar value={b.amount ? b.spent / b.amount : 0} tone={b.pct > 100 ? "negative" : b.pct > 80 ? "warning" : "positive"} h={4} /></li>)}</ul>}
             </Card>
             <Card title="Cash flow this month">
               <MiniBars series={Object.values(s.daily.reduce((acc, d) => { const k = d.date.slice(8); acc[k] = acc[k] ?? { label: k, a: 0, b: 0 }; if (d.type === "income") acc[k].a += d.total; else acc[k].b += d.total; return acc; }, {} as Record<string, { label: string; a: number; b: number }>))} labels={["Income", "Expenses"]} format={(v) => fmtMoney(v, cur)} />
@@ -111,7 +112,7 @@ export default function FinancePage() {
       )}
       {tab === "savings" && (
         <Card title="Savings goals" action={<button className="btn-primary btn-sm" onClick={() => { setForm({}); setModal("savings"); }}>+ Goal</button>}>
-          {!savings.data?.length ? <p className="text-sm muted">No savings goals yet.</p> : <ul className="space-y-3">{savings.data.map((g) => <li key={g.id}><div className="flex items-center justify-between text-sm"><span>{g.name}{g.deadline && <span className="muted"> · by {fmtDate(g.deadline)}</span>}</span><span className="tnum">{fmtMoney(g.currentAmount, cur)} / {fmtMoney(g.targetAmount, cur)}</span></div><Bar value={g.targetAmount ? g.currentAmount / g.targetAmount : 0} tone="positive" /><div className="mt-1 flex gap-2 text-xs"><button className="link" onClick={async () => { const v = prompt("New current amount", String(g.currentAmount)); if (v == null) return; await api(`/api/finance/savings/${g.id}`, { method: "PATCH", json: { currentAmount: Number(v), targetAmount: g.targetAmount } }); refreshAll(); }}>Update amount</button><button className="link" onClick={() => del(`/api/finance/savings/${g.id}`, "Delete savings goal?")}>Delete</button></div></li>)}</ul>}
+          {!savings.data?.length ? <p className="text-sm muted">No savings goals yet. Add one to track what you are putting aside and how close you are.</p> : <ul className="space-y-3">{savings.data.map((g) => <li key={g.id}><div className="flex items-center justify-between text-sm"><span>{g.name}{g.deadline && <span className="muted"> · by {fmtDate(g.deadline)}</span>}</span><span className="tnum">{fmtMoney(g.currentAmount, cur)} / {fmtMoney(g.targetAmount, cur)}</span></div><Bar value={g.targetAmount ? g.currentAmount / g.targetAmount : 0} tone="positive" /><div className="mt-1 flex gap-2 text-xs"><button className="link" onClick={() => ask(async (v) => { await api(`/api/finance/savings/${g.id}`, { method: "PATCH", json: { currentAmount: Number(v), targetAmount: g.targetAmount } }); refreshAll(); toast.success("Savings updated", g.name); }, { title: g.name, label: "Amount saved so far", hint: `Target: ${fmtMoney(g.targetAmount, cur)}`, type: "number", step: "0.01", min: "0", initial: String(g.currentAmount), required: true })}>Update amount</button><button className="link" onClick={() => del(`/api/finance/savings/${g.id}`, "Delete savings goal?")}>Delete</button></div></li>)}</ul>}
         </Card>
       )}
       <Modal open={modal !== null} onClose={() => setModal(null)} title={modal === "tx" ? (editingTx ? "Edit transaction" : "New transaction") : modal === "account" ? "New account" : modal === "budget" ? "Budget" : modal === "recurring" ? "Recurring transaction" : modal === "savings" ? "Savings goal" : "Category"}>
@@ -133,6 +134,7 @@ export default function FinancePage() {
         </form>
       </Modal>
       {dialog}
+      {promptDialog}
     </div>
   );
 }

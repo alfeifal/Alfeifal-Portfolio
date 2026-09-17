@@ -177,7 +177,7 @@ function Assistant() {
       </div>
       <Modal open={showHistory} onClose={() => setShowHistory(false)} title="Conversations">
         <p className="mb-2 text-xs muted">Chats are kept for 24 hours after your last message, then deleted. What the assistant did (action log), its memory and your data are kept.</p>
-        {convs.data?.length ? <ul className="divide-y divide-border">{convs.data.map((c) => <li key={c.id} className="row -mx-2 flex items-center gap-2 rounded-lg px-2 py-2 text-sm"><button className="min-w-0 flex-1 truncate text-left" onClick={() => open(c.id)}>{c.title}</button><span className="pill">{c.kind}</span><button className="btn-ghost btn-sm" onClick={async () => { await api(`/api/ai/conversations/${c.id}`, { method: "DELETE" }); if (c.id === conversationId) startNew(); convs.refresh(); }}>✕</button></li>)}</ul> : <p className="text-sm muted">No conversations yet.</p>}
+        {convs.data?.length ? <ul className="divide-y divide-border">{convs.data.map((c) => <li key={c.id} className="row -mx-2 flex items-center gap-2 rounded-lg px-2 py-2 text-sm"><button className="min-w-0 flex-1 truncate text-left" onClick={() => open(c.id)}>{c.title}</button><span className="pill">{c.kind}</span><button className="btn-ghost btn-sm" onClick={async () => { await api(`/api/ai/conversations/${c.id}`, { method: "DELETE" }); if (c.id === conversationId) startNew(); convs.refresh(); }}>✕</button></li>)}</ul> : <p className="text-sm muted">No conversations yet. Ask anything above — transcripts are kept for 24 hours, what the assistant does is kept for good.</p>}
       </Modal>
     </div>
   );

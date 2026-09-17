@@ -24,6 +24,29 @@ export function errorResponse(e: unknown) {
   return NextResponse.json({ error: process.env.NODE_ENV === "production" ? "Internal error" : msg }, { status: 500 });
 }
 
+/**
+ * The only routes an account still owing a password change may call. Everything else answers 403
+ * with `code: "password_change_required"` so the client knows to send them to the change screen
+ * rather than showing a generic failure.
+ */
+const PASSWORD_GATE_ALLOWED: { path: string; methods?: string[] }[] = [
+  { path: "/api/me/password" },
+  { path: "/api/auth/logout" },
+  { path: "/api/me", methods: ["GET"] }, // reading the profile, not editing it
+];
+export const PASSWORD_CHANGE_REQUIRED = "password_change_required";
+
+function passwordGate(req: Request, user: SessionUser) {
+  if (!user.mustChangePassword) return null;
+  const { pathname } = new URL(req.url);
+  const allowed = PASSWORD_GATE_ALLOWED.find((a) => a.path === pathname);
+  if (allowed && (!allowed.methods || allowed.methods.includes(req.method.toUpperCase()))) return null;
+  return NextResponse.json(
+    { error: "Set your own password before using the app.", code: PASSWORD_CHANGE_REQUIRED },
+    { status: 403 },
+  );
+}
+
 type Ctx<P> = { params: Promise<P> };
 type Handler<P> = (req: Request, ctx: { user: SessionUser; params: P }) => Promise<Response>;
 
@@ -36,6 +59,8 @@ export function withAuth<P = Record<string, string>>(handler: Handler<P>, opts: 
       const l = LIMITS[opts.limit ?? "api"];
       const rl = rateLimit(`${opts.limit ?? "api"}:${user.id}`, l.limit, l.windowMs);
       if (!rl.ok) return NextResponse.json({ error: "Too many requests" }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } });
+      const gated = passwordGate(req, user);
+      if (gated) return gated;
       const params = ctx ? await ctx.params : ({} as P);
       return await handler(req, { user, params });
     } catch (e) {

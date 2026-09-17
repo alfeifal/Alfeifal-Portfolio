@@ -2,12 +2,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Badge, Card, ErrorBox, Field, PageHeader, Spinner, Source, AsyncButton } from "@/components/ui";
+import { Badge, Card, ErrorBox, Field, PageHeader, Spinner, Source, AsyncButton, useConfirm, usePrompt } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { api, fmtDate, useApi } from "@/lib/client";
 import { useTheme } from "@/components/theme";
 
-interface Me { id: string; email: string; name: string; timezone: string; currency: string; locale: string; preferences: Record<string, unknown>; aiConfigured: boolean; marketProviders: Record<string, boolean> }
+interface Me { id: string; email: string; name: string; role: "admin" | "user"; isActive: boolean; mustChangePassword: boolean; createdAt: string; lastLoginAt: string | null; timezone: string; currency: string; locale: string; preferences: Record<string, unknown>; aiConfigured: boolean; marketProviders: Record<string, boolean> }
 interface Memory { id: string; kind: string; key: string | null; content: string; importance: number; pinned: boolean; source: string; updatedAt: string }
 interface ActionLog { id: string; tool: string; risk: string; status: string; summary: string | null; error: string | null; createdAt: string }
 interface AuditEntry { id: string; actor: "user" | "ai" | "system"; action: string; entityType: string | null; entityId: string | null; ip: string | null; createdAt: string }
@@ -21,6 +21,8 @@ export default function SettingsPage() {
   const actions = useApi<ActionLog[]>("/api/ai/actions?limit=50");
   const audit = useApi<AuditEntry[]>("/api/me/audit");
   const { theme, setTheme } = useTheme();
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  const { ask, dialog: promptDialog } = usePrompt();
   const [profile, setProfile] = useState({ name: "", timezone: "", currency: "" });
   const [pw, setPw] = useState({ currentPassword: "", newPassword: "" });
   const [msg, setMsg] = useState("");
@@ -36,8 +38,25 @@ export default function SettingsPage() {
   if (!d) return <Spinner />;
   return (
     <div className="space-y-4">
-      <PageHeader title="Settings" subtitle={d.email} />
+      <PageHeader
+        title="Settings"
+        subtitle={d.email}
+        action={<span className="flex items-center gap-1.5">{d.role === "admin" ? <Badge tone="accent">Administrator</Badge> : <Badge>User</Badge>}<Badge tone={d.isActive ? "positive" : "negative"}>{d.isActive ? "Active" : "Deactivated"}</Badge></span>}
+      />
       {msg && <p className="rounded-xl bg-positive/10 p-2 text-sm text-positive">{msg}</p>}
+      <Card title="Account">
+        <dl className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
+          <div className="flex justify-between gap-3"><dt className="muted">Role</dt><dd>{d.role === "admin" ? "Administrator" : "User"}</dd></div>
+          <div className="flex justify-between gap-3"><dt className="muted">Status</dt><dd>{d.isActive ? "Active" : "Deactivated"}</dd></div>
+          <div className="flex justify-between gap-3"><dt className="muted">Member since</dt><dd className="tnum">{fmtDate(d.createdAt)}</dd></div>
+          <div className="flex justify-between gap-3"><dt className="muted">Last sign-in</dt><dd className="tnum">{d.lastLoginAt ? fmtDate(d.lastLoginAt, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "this is your first"}</dd></div>
+        </dl>
+        <p className="mt-2 text-xs muted">
+          {d.role === "admin"
+            ? <>You can manage accounts in <Link className="link" href="/admin">Administration</Link>. That is account management only — it gives you no access to anybody else&apos;s data.</>
+            : <>Only an administrator can create or disable accounts. Everything you see anywhere in the app is your own.</>}
+        </p>
+      </Card>
       <div className="grid gap-3 md:grid-cols-2">
         <Card title="Profile">
           <form className="space-y-2" onSubmit={async (e) => { e.preventDefault(); await api("/api/me", { method: "PATCH", json: profile }); flash("Profile saved"); router.refresh(); }}>
@@ -70,7 +89,7 @@ export default function SettingsPage() {
         </Card>
       </div>
       <Card title="AI memory" action={<span className="text-xs muted">What the assistant remembers about you — editable</span>}>
-        <ul className="divide-y divide-border text-sm">{memory.data?.map((m) => <li key={m.id} className="flex items-start gap-2 py-1.5"><Badge>{m.kind}</Badge><span className="min-w-0 flex-1">{m.key && <span className="font-medium">{m.key}: </span>}{m.content}<span className="block text-[11px] muted">importance {m.importance} · <Source source={m.source} /> · {fmtDate(m.updatedAt)}</span></span><button className="btn-ghost btn-sm" onClick={async () => { const v = prompt("Edit memory", m.content); if (v == null) return; await api(`/api/ai/memory/${m.id}`, { method: "PATCH", json: { content: v } }); memory.refresh(); }}>edit</button><button className="btn-ghost btn-sm" onClick={async () => { await api(`/api/ai/memory/${m.id}`, { method: "DELETE" }); memory.refresh(); }}>✕</button></li>)}{memory.data?.length === 0 && <p className="py-2 muted">Nothing stored yet. Tell the assistant things like “I work Mon–Fri 10–18”.</p>}</ul>
+        <ul className="divide-y divide-border text-sm">{memory.data?.map((m) => <li key={m.id} className="flex items-start gap-2 py-1.5"><Badge>{m.kind}</Badge><span className="min-w-0 flex-1">{m.key && <span className="font-medium">{m.key}: </span>}{m.content}<span className="block text-[11px] muted">importance {m.importance} · <Source source={m.source} /> · {fmtDate(m.updatedAt)}</span></span><button className="btn-ghost btn-sm" onClick={() => ask(async (v) => { await api(`/api/ai/memory/${m.id}`, { method: "PATCH", json: { content: v } }); memory.refresh(); toast.success("Memory updated"); }, { title: "Edit memory", label: m.key ?? m.kind, type: "textarea", initial: m.content, required: true })}>edit</button><button className="btn-ghost btn-sm" aria-label="Forget this memory" onClick={() => confirm(async () => { await api(`/api/ai/memory/${m.id}`, { method: "DELETE" }); memory.refresh(); toast.success("Memory forgotten"); }, { title: "Forget this?", description: m.content, confirmLabel: "Forget" })}>✕</button></li>)}{memory.data?.length === 0 && <p className="py-2 muted">Nothing stored yet. Tell the assistant things like “I work Mon–Fri 10–18”.</p>}</ul>
         <form className="mt-2 grid gap-2 sm:grid-cols-[120px_160px_1fr_auto]" onSubmit={async (e) => { e.preventDefault(); await api("/api/ai/memory", { method: "POST", json: { kind: mem.kind, key: mem.key || null, content: mem.content, importance: 4, pinned: true } }); setMem({ kind: "fact", key: "", content: "" }); memory.refresh(); }}>
           <select className="field" value={mem.kind} onChange={(e) => setMem({ ...mem, kind: e.target.value })}>{["fact", "preference", "context", "goal", "routine", "person", "note"].map((k) => <option key={k}>{k}</option>)}</select>
           <input className="field" placeholder="key (optional)" value={mem.key} onChange={(e) => setMem({ ...mem, key: e.target.value })} />
@@ -109,13 +128,15 @@ export default function SettingsPage() {
         </div>
         <p className="mt-2 text-xs muted">Database backups: run <code>pnpm backup</code> (pg_dump) or the scheduled GitHub Action — see docs/DEPLOYMENT.md. The German course progress is included in the export.</p>
         <details className="mt-3"><summary className="cursor-pointer text-sm text-negative">Delete account and all data</summary>
-          <form className="mt-2 grid gap-2 sm:grid-cols-3" onSubmit={async (e) => { e.preventDefault(); if (!confirm("This permanently deletes everything. Continue?")) return; try { await api("/api/me/delete", { method: "POST", json: del }); window.location.assign("/login"); } catch (err) { toast.error("Account not deleted", (err as Error).message); } }}>
+          <form className="mt-2 grid gap-2 sm:grid-cols-3" onSubmit={(e) => { e.preventDefault(); confirm(async () => { await api("/api/me/delete", { method: "POST", json: del }); window.location.assign("/login"); }, { title: "Delete your account and all its data?", description: "Every task, transaction, workout, meal, note, memory and review is removed. This cannot be undone.", confirmLabel: "Delete permanently" }); }}>
             <input className="field" type="password" placeholder="Password" required value={del.password} onChange={(e) => setDel({ ...del, password: e.target.value })} />
             <input className="field" placeholder='Type "DELETE"' required value={del.confirm} onChange={(e) => setDel({ ...del, confirm: e.target.value })} />
             <button className="btn-danger btn-sm">Delete permanently</button>
           </form>
         </details>
       </Card>
+      {confirmDialog}
+      {promptDialog}
     </div>
   );
 }

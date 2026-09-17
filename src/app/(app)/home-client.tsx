@@ -155,7 +155,7 @@ export default function HomeClient({ initial }: { initial: DashboardData }) {
               )}
               {has("projects") && (
                 <Card title="Projects" href="/projects" kind="interactive">
-                  {d.projects.length === 0 ? <p className="text-sm muted">No active projects.</p> : <ul className="space-y-1.5">{d.projects.slice(0, 5).map((p) => <li key={p.id}><Link href={`/projects/${p.id}`} className="flex items-center justify-between text-sm hover:underline"><span className="truncate">{p.name}</span><span className="muted text-xs">{p.openTasks} open · {p.computedProgress}%</span></Link></li>)}</ul>}
+                  {d.projects.length === 0 ? <p className="text-sm muted">No active projects. <Link className="link" href="/projects">Start one</Link> to group tasks and milestones under it.</p> : <ul className="space-y-1.5">{d.projects.slice(0, 5).map((p) => <li key={p.id}><Link href={`/projects/${p.id}`} className="flex items-center justify-between text-sm hover:underline"><span className="truncate">{p.name}</span><span className="muted text-xs">{p.openTasks} open · {p.computedProgress}%</span></Link></li>)}</ul>}
                 </Card>
               )}
               {has("training") && (
@@ -166,6 +166,7 @@ export default function HomeClient({ initial }: { initial: DashboardData }) {
               {has("studies") && d.studies && (
                 <Card title="Studies & German" href="/studies" kind="interactive">
                   <p className="text-sm"><AnimatedNumber value={d.studies.totalMinutes} /> min studied in the last 7 days</p>
+                  {d.studies.totalMinutes === 0 && d.studies.bySubject.length === 0 && <p className="mt-1 text-sm muted"><Link className="link" href="/studies">Log a session</Link> or pick up the <Link className="link" href="/german">German course</Link>.</p>}
                   <ul className="mt-1 space-y-1 text-sm">{d.studies.bySubject.slice(0, 4).map((s) => <li key={s.name} className="flex justify-between"><span>{s.name}</span><span className="muted tnum">{s.minutes} min{s.weeklyGoalMinutes ? ` / ${s.weeklyGoalMinutes}` : ""}</span></li>)}</ul>
                   {d.studies.german && <p className="mt-2 text-sm"><Link className="link" href="/german">German</Link>: 🔥 {d.studies.german.streak} · {d.studies.german.unitsPassed}/28 units · {d.studies.german.xp} XP</p>}
                   {d.studies.exams.length > 0 && <p className="mt-2 text-xs muted">Next exam: {d.studies.exams[0].title} · {fmtDate(d.studies.exams[0].date)}</p>}
@@ -173,7 +174,7 @@ export default function HomeClient({ initial }: { initial: DashboardData }) {
               )}
               {has("investing") && (
                 <Card title="Investing" href="/investing" kind="interactive">
-                  {!d.investing || (d.investing.positions.length === 0 && d.investing.cash === 0) ? <p className="text-sm muted">No investments recorded.</p> : (
+                  {!d.investing || (d.investing.positions.length === 0 && d.investing.cash === 0) ? <p className="text-sm muted">Nothing recorded yet. <Link className="link" href="/investing">Add an account and a buy</Link> to track cost basis and value.</p> : (
                     <>
                       <p className="text-xl font-semibold tnum"><AnimatedNumber value={d.investing.totalValue + d.investing.cash} format={(v) => fmtMoney(v, cur)} /></p>
                       <p className="text-xs muted">cost {fmtMoney(d.investing.totalCost, cur)} · unrealized <span className={d.investing.unrealized >= 0 ? "text-positive" : "text-negative"}>{fmtMoney(d.investing.unrealized, cur)}</span>{d.investing.unpriced.length > 0 && ` · ${d.investing.unpriced.length} unpriced`}</p>
@@ -184,10 +185,16 @@ export default function HomeClient({ initial }: { initial: DashboardData }) {
               )}
               {has("trading") && (
                 <Card title="Trading" href="/trading" kind="interactive">
+                  {d.trading.openTrades.length === 0 && d.trading.watchlists.every((w) => w.items.length === 0) ? (
+                    <p className="text-sm muted">No trades or watched symbols. <Link className="link" href="/trading">Open Trading</Link> — simulated and real stay separate.</p>
+                  ) : (
+                  <>
                   <p className="mb-1 text-xs muted">Open positions: {d.trading.openTrades.length}</p>
                   {d.trading.openTrades.slice(0, 3).map((t) => <p key={t.id} className="text-sm">{t.symbol} {t.direction} <Badge tone={t.mode === "real" ? "warning" : "muted"}>{t.mode}</Badge></p>)}
                   <p className="mt-2 text-xs muted">Watchlist: {d.trading.watchlists.flatMap((w) => w.items).map((i) => i.symbol).join(", ") || "empty"}</p>
                   {d.trading.economicEvents.length > 0 && <p className="mt-2 text-xs">Upcoming: {d.trading.economicEvents.map((e) => e.title).join(" · ")}</p>}
+                  </>
+                  )}
                 </Card>
               )}
               {has("news") && (

@@ -51,8 +51,8 @@ export default function PlannerPage() {
           </div>); })}
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <Card title="Goals in play" href="/goals">{goals.data?.length ? <ul className="text-sm">{goals.data.slice(0, 6).map((g) => <li key={g.id} className="flex justify-between"><span className="truncate">{g.name}</span><span className="muted">{g.progress}%{g.deadline ? " · " + fmtDate(g.deadline) : ""}</span></li>)}</ul> : <p className="text-sm muted">No active goals.</p>}</Card>
-        <Card title="Projects in play" href="/projects">{projects.data?.length ? <ul className="text-sm">{projects.data.slice(0, 6).map((p) => <li key={p.id} className="flex justify-between"><span className="truncate">{p.name}</span><span className="muted">{p.openTasks} open{p.deadline ? " · " + fmtDate(p.deadline) : ""}</span></li>)}</ul> : <p className="text-sm muted">No active projects.</p>}</Card>
+        <Card title="Goals in play" href="/goals">{goals.data?.length ? <ul className="text-sm">{goals.data.slice(0, 6).map((g) => <li key={g.id} className="flex justify-between"><span className="truncate">{g.name}</span><span className="muted">{g.progress}%{g.deadline ? " · " + fmtDate(g.deadline) : ""}</span></li>)}</ul> : <p className="text-sm muted">No active goals to plan around yet.</p>}</Card>
+        <Card title="Projects in play" href="/projects">{projects.data?.length ? <ul className="text-sm">{projects.data.slice(0, 6).map((p) => <li key={p.id} className="flex justify-between"><span className="truncate">{p.name}</span><span className="muted">{p.openTasks} open{p.deadline ? " · " + fmtDate(p.deadline) : ""}</span></li>)}</ul> : <p className="text-sm muted">No active projects to plan around yet.</p>}</Card>
       </div>
       {(dayPlan.data?.current || weekPlan.data?.current) && (
         <div className="space-y-2">
