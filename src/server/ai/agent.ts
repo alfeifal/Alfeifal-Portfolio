@@ -15,6 +15,7 @@ import { conversationExpiry, touchConversation } from "@/server/services/convers
 import { encodeEvent, turnOutcome, type ChatStreamEvent, type TurnOutcome } from "./stream";
 import { asUserFacingAiError, logAiError, safeAiMessage } from "./errors";
 import { assertSendable, blocksOf, repairTranscript, UNKNOWN_RESULT, type Recovered, type Violation } from "./transcript";
+import { toolsForMode } from "./tool-groups";
 import "./tools"; // registers every tool
 
 const MAX_TOOL_ROUNDS = 8;
@@ -42,8 +43,9 @@ export interface Usage { input: number; output: number; cacheRead: number; cache
 export interface ChatResult { conversationId: string; messageId: string; text: string; actions: ExecutedAction[]; pending: ExecutedAction[]; outcome: TurnOutcome; usage: Usage }
 
 /**
- * The tool block is ~92 kB of JSON for 134 tools and is identical on every request, so it is built
+ * The tool block is ~102 kB of JSON for 144 tools and is identical on every request, so it is built
  * once per process instead of being re-serialised (and re-converted from Zod) on each message.
+ * Modes that use a subset filter this array; the objects themselves are still built only once.
  */
 let toolCache: Anthropic.Tool[] | null = null;
 function anthropicTools(): Anthropic.Tool[] {
@@ -54,10 +56,12 @@ function anthropicTools(): Anthropic.Tool[] {
 /**
  * Marks the end of the tool block as a prompt-cache breakpoint.
  *
- * Those ~25k tokens are the same for every user and every message, and they dominate both the time to
- * first token and the cost of a turn. Caching them keeps all 134 tools available to the model — no
- * routing, no capability lost — while only the system prompt and the transcript, which genuinely
- * change, are processed fresh.
+ * This is the ONLY breakpoint in the request, which is what makes the tool block — and nothing else —
+ * the cached prefix: the system prompt carries a to-the-second timestamp and the transcript grows every
+ * turn, so both sit after it and are processed fresh regardless. Caching the ~27.5k tokens of tools is
+ * what keeps the assistant able to reach all 144 without paying for them on every message.
+ *
+ * A mode with its own subset gets its own cache entry, stable for as long as that mode's list is.
  */
 function withCacheBreakpoint(tools: Anthropic.Tool[]): Anthropic.Tool[] {
   if (!tools.length) return tools;
@@ -204,7 +208,22 @@ async function runChat(user: SessionUser, opts: { conversationId?: string | null
   emit({ type: "start", conversationId: conv.id });
   const [userMsg] = await db.insert(messages).values({ conversationId: conv.id, role: "user", text: opts.text, content: [{ type: "text", text: opts.text }] }).returning();
   const system = await buildSystemPrompt(user, opts.systemExtra, opts.snapshotSections);
-  const tools = withCacheBreakpoint(opts.allowedTools ? anthropicTools().filter((t) => opts.allowedTools!.includes(t.name)) : anthropicTools());
+  /*
+   * The tool surface is decided by the MODE, never by the message.
+   *
+   * Phase 3.16 measured what routing tools per message would cost. The cached prefix here is the tool
+   * block (the only `cache_control` breakpoint is on the last tool), so changing the tool set means
+   * re-writing that block instead of reading it: 4-6x cheaper when the same subset comes back, but
+   * 2-3x dearer on every topic switch, and a subset has to be reused 3-4 times inside one cache TTL
+   * before it breaks even. On the assistant — where the next sentence can be about anything — that is a
+   * gamble whose downside is a tool being absent when it is needed. So the assistant keeps all of them.
+   *
+   * A mode's list, by contrast, is constant: Fast Log always gets the same 22, the planner the same 12,
+   * each with its own stable cached prefix and no switching at all. `kind` comes from the route's own
+   * enum, so nothing a user types can widen its surface.
+   */
+  const allowed = opts.allowedTools ?? toolsForMode(opts.kind ?? "assistant");
+  const tools = withCacheBreakpoint(allowed ? anthropicTools().filter((t) => allowed.includes(t.name)) : anthropicTools());
   const { messages: transcript, repaired } = await history(conv.id);
   if (repaired.length) console.warn("[ai] repaired a stored transcript before sending", { conversationId: conv.id, repaired });
   const actions: ExecutedAction[] = [];

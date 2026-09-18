@@ -3,6 +3,7 @@ import { db } from "@/server/db";
 import { aiReports } from "@/server/db/schema";
 import type { SessionUser } from "@/server/auth/session";
 import { chat, complete } from "./agent";
+import { PLANNER_TOOLS } from "./tool-groups";
 import { listTasks } from "@/server/services/tasks";
 import { listEvents } from "@/server/services/calendar";
 import { listGoals } from "@/server/services/goals";
@@ -103,11 +104,11 @@ export async function marketBrief(user: SessionUser) {
  * and saves the result as a DRAFT with `propose_plan`. It cannot create anything real — planner mode is
  * restricted to read tools plus propose_plan — so applying a plan stays an explicit action of the user.
  */
-const PLANNER_TOOLS = ["get_snapshot", "get_plan", "propose_plan", "get_calendar", "get_tasks", "get_goals", "get_projects", "get_today_workout", "get_training_plan", "get_study_schedule", "get_german_progress", "get_financial_summary"];
+// The planner's surface lives with every other mode's in ai/tool-groups.ts.
 export async function plan(user: SessionUser, opts: { horizon: "today" | "week"; instructions?: string; conversationId?: string | null }) {
   const horizon = opts.horizon === "week" ? "week" : "day";
   const extra = `PLANNER MODE (${opts.horizon}). First gather the real data: get_snapshot, get_calendar (includeFreeSlots=true), get_tasks (today + upcoming + overdue), get_goals, get_projects, get_today_workout, get_study_schedule and get_german_progress. Then produce a prioritised plan based on deadlines, importance and free time — never invent arbitrary tasks, never schedule training on a rest day of the cycle. Finally SAVE it by calling propose_plan with horizon "${horizon}" and one item per block. You cannot create tasks or events here and you must not claim the plan was applied: it is a draft waiting for the user to accept it in the Planner.`;
-  return chat(user, { conversationId: opts.conversationId ?? null, kind: "planner", text: opts.instructions?.trim() ? opts.instructions : opts.horizon === "today" ? "What should I do today? Build my plan." : "Organize my week.", systemExtra: extra, maxRounds: 12, allowedTools: PLANNER_TOOLS });
+  return chat(user, { conversationId: opts.conversationId ?? null, kind: "planner", text: opts.instructions?.trim() ? opts.instructions : opts.horizon === "today" ? "What should I do today? Build my plan." : "Organize my week.", systemExtra: extra, maxRounds: 12, allowedTools: [...PLANNER_TOOLS] });
 }
 
 /**
