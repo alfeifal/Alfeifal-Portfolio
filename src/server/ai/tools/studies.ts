@@ -7,7 +7,7 @@ import { addDaysKey, todayKey } from "@/lib/dates";
 defineTool({ name: "get_study_schedule", module: "studies", risk: "read", description: "Subjects, upcoming exams and open assignments.", schema: z.object({}), run: async (_i, ctx) => ({ subjects: await st.listSubjects(ctx.user.id), exams: await st.listExams(ctx.user.id, true, ctx.user.timezone), assignments: await st.listAssignments(ctx.user.id, true) }) });
 defineTool({
   name: "log_study_session", module: "studies", risk: "low",
-  description: "Log a study session: subject by name (created if missing), minutes, topic.",
+  description: "Log a study session: `subject` by name (created if missing), `durationMinutes`, and optionally a topic.",
   schema: z.object({ subject: z.string(), durationMinutes: z.number().int().min(1).max(1440), topic: z.string().optional(), notes: z.string().optional(), date: dateSchema.optional() }),
   summarize: (i) => `log_study_session — ${i.subject} — ${i.durationMinutes} min`,
   run: (i, ctx) => st.logStudySession(ctx.user.id, { ...i, source: "ai" }, ctx.user.timezone),

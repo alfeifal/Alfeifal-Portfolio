@@ -18,14 +18,14 @@ defineTool({ name: "get_accounts", module: "finance", risk: "read", description:
 defineTool({ name: "get_transactions", module: "finance", risk: "read", description: "List transactions (expenses/income/transfers) with optional filters.", schema: z.object({ from: dateSchema.optional(), to: dateSchema.optional(), type: z.enum(["expense", "income", "transfer"]).optional(), q: z.string().optional(), limit: z.number().int().max(200).optional() }), run: (i, ctx) => fin.listTransactions(ctx.user.id, i) });
 defineTool({
   name: "add_expense", module: "finance", risk: "low",
-  description: "Record an expense. Category by name (created if missing). Date defaults to today.",
+  description: "Record an expense: real personal money leaving the user's pocket. Category by name (created if missing). Date defaults to today. Not for buying an asset (add_investment_transaction) or for a trade (add_trade) — those are separate books and must never be logged here.",
   schema: z.object({ amount: z.number().positive(), category: z.string().optional(), description: z.string().default(""), merchant: z.string().optional(), date: dateSchema.optional(), accountId: z.string().uuid().optional(), notes: z.string().optional() }),
   summarize: (i) => `add_expense — ${i.amount} — ${i.category ?? "uncategorized"} — ${i.description || i.merchant || ""}`.trim(),
   run: (i, ctx) => fin.createTransaction(ctx.user.id, { type: "expense", ...i, source: "ai" }, ctx.user.timezone),
 });
 defineTool({
   name: "add_income", module: "finance", risk: "low",
-  description: "Record income (salary, freelance...).",
+  description: "Record income: real personal money arriving (salary, freelance, a refund). Not a dividend or a sale inside a broker account (add_investment_transaction) and not a closed trade's profit (update_trade) — those stay in their own book.",
   schema: z.object({ amount: z.number().positive(), category: z.string().optional(), description: z.string().default(""), date: dateSchema.optional(), accountId: z.string().uuid().optional() }),
   summarize: (i) => `add_income — ${i.amount} — ${i.category ?? "income"}`,
   run: (i, ctx) => fin.createTransaction(ctx.user.id, { type: "income", ...i, source: "ai" }, ctx.user.timezone),

@@ -36,7 +36,7 @@ defineTool({
 });
 defineTool({
   name: "log_sets", module: "training", risk: "low",
-  description: "Log several sets of one exercise at once (e.g. '80x6, 80x6, 77.5x7').",
+  description: "Log several sets of one exercise at once. `sets` is a list, one entry per set: '80x6, 80x6, 77.5x7' becomes [{weightKg:80,reps:6},{weightKg:80,reps:6},{weightKg:77.5,reps:7}]. Use `seconds` instead of `reps` for a held exercise.",
   schema: z.object({ exercise: z.string(), sets: z.array(z.object({ weightKg: z.number().min(0).optional(), reps: z.number().int().optional(), seconds: z.number().int().optional() })).min(1).max(15), date: dateSchema.optional() }),
   summarize: (i) => `log_sets — ${i.exercise} — ${i.sets.length} sets`,
   run: async (i, ctx) => { const out = []; for (const s of i.sets) out.push(await tr.logSet(ctx.user.id, { exercise: i.exercise, ...s, date: i.date, isWarmup: false, source: "ai" }, ctx.user.timezone)); return { logged: out.length, newRecords: out.flatMap((o) => o.newRecords), sessionId: out[0]?.session.id }; },

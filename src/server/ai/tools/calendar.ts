@@ -22,7 +22,7 @@ defineTool({
 });
 defineTool({
   name: "create_event", module: "calendar", risk: "low",
-  description: "Create a calendar event. kind: work | training | study | german | personal | deadline | reminder | event. Use ISO datetimes in the user's local time (e.g. 2026-09-15T10:00:00).",
+  description: "Create a calendar event: something that HAPPENS at a time, occupying a slot. Use create_task instead for something to do by a date with no fixed hour. kind: work | training | study | german | personal | deadline | reminder | event. Use ISO datetimes in the user's local time (e.g. 2026-09-15T10:00:00).",
   schema: z.object({ title: z.string(), kind: cal.eventKindSchema.default("event"), startAt: z.string(), endAt: z.string().optional(), allDay: z.boolean().default(false), description: z.string().optional(), location: z.string().optional(), taskId: z.string().uuid().optional(), projectId: z.string().uuid().optional(), goalId: z.string().uuid().optional(), reminderMinutes: z.number().int().optional() }),
   summarize: (i) => `create_event — ${i.title} — ${i.startAt}`,
   run: (i, ctx) => cal.createEvent(ctx.user.id, cal.eventCreateSchema.parse({ ...i, source: "ai" })),
