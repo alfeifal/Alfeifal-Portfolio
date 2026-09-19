@@ -44,7 +44,9 @@ export type ViolationKind =
   | "orphan_tool_use"
   | "orphan_tool_result"
   | "duplicate_tool_use_id"
-  | "duplicate_tool_result";
+  | "duplicate_tool_result"
+  /** A provider-side search call (`server_tool_use`) whose `tool_search_tool_result` never arrived. */
+  | "orphan_server_tool_use";
 
 export interface Violation {
   kind: ViolationKind;
@@ -88,6 +90,16 @@ export function blocksOf(content: Msg["content"] | null | undefined): Block[] {
 const isToolUse = (b: Block): b is Anthropic.ToolUseBlockParam => b.type === "tool_use";
 const isToolResult = (b: Block): b is Anthropic.ToolResultBlockParam => b.type === "tool_result";
 
+/*
+ * Native tool-search blocks (phase 3.17). These are the provider's, not ours: a `server_tool_use` names a
+ * search that ran on Anthropic's servers and its `tool_search_tool_result` carries what it found. Both sit
+ * inside the SAME assistant message, are echoed back unchanged, and are never answered with a
+ * `tool_result` — returning one for a `srvtoolu_` id is a 400. So the only thing that can go wrong is a
+ * turn cut off between the two, which would replay a call with no result.
+ */
+const isServerToolUse = (b: Block): b is Anthropic.ServerToolUseBlockParam => b.type === "server_tool_use";
+const isToolSearchResult = (b: Block): b is Anthropic.ToolSearchToolResultBlockParam => b.type === "tool_search_tool_result";
+
 /** True when a block carries nothing the provider would accept — an empty text block is rejected. */
 function isEmptyBlock(b: Block): boolean {
   if (b.type === "text") return !String(b.text ?? "").trim();
@@ -116,6 +128,10 @@ export function validateTranscript(messages: readonly Msg[]): Violation[] {
     if (blocks.some(isEmptyBlock)) push("empty_content", i, role, "message contains an empty text block");
 
     if (role === "assistant") {
+      const answeredBySearch = new Set(blocks.filter(isToolSearchResult).map((r) => r.tool_use_id));
+      for (const s of blocks.filter(isServerToolUse)) {
+        if (!answeredBySearch.has(s.id)) push("orphan_server_tool_use", i, role, `${s.name} (${s.id}) has no tool_search_tool_result`);
+      }
       const uses = blocks.filter(isToolUse);
       for (const u of uses) {
         if (seenUse.has(u.id)) push("duplicate_tool_use_id", i, role, `${u.name} reuses id ${u.id}`);
@@ -220,7 +236,15 @@ export function repairTranscript(messages: readonly Msg[], opts: RepairOptions =
 
     const uses: Anthropic.ToolUseBlockParam[] = [];
     const keptAssistant: Block[] = [];
+    // A provider-side search is only replayable as a pair. If the turn was cut off between the call and
+    // its result, the call is dropped rather than replayed on its own — the same choice phase 3.14 made
+    // for a `tool_use` nothing answered.
+    const searchAnswered = new Set(m.blocks.filter(isToolSearchResult).map((r) => r.tool_use_id));
     for (const b of m.blocks) {
+      if (isServerToolUse(b) && !searchAnswered.has(b.id)) {
+        note("orphan_server_tool_use", m.at, "assistant", `dropped ${b.name} (${b.id}) with no tool_search_tool_result`);
+        continue;
+      }
       if (isToolUse(b)) {
         if (seenUse.has(b.id)) { note("duplicate_tool_use_id", m.at, "assistant", `dropped a second tool_use with id ${b.id}`); continue; }
         seenUse.add(b.id);
@@ -228,7 +252,8 @@ export function repairTranscript(messages: readonly Msg[], opts: RepairOptions =
       }
       keptAssistant.push(b);
     }
-    out.push({ ...m, blocks: keptAssistant });
+    if (keptAssistant.length) out.push({ ...m, blocks: keptAssistant });
+    else note("empty_content", m.at, "assistant", "dropped a message left empty after removing orphan blocks");
     if (!uses.length) continue;
 
     // The next message, if it is a user message, is this round's answer sheet.

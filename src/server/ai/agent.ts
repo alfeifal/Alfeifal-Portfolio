@@ -16,6 +16,7 @@ import { encodeEvent, turnOutcome, type ChatStreamEvent, type TurnOutcome } from
 import { asUserFacingAiError, logAiError, safeAiMessage } from "./errors";
 import { assertSendable, blocksOf, repairTranscript, UNKNOWN_RESULT, type Recovered, type Violation } from "./transcript";
 import { toolsForMode } from "./tool-groups";
+import { planTools, toolSearchPromptSection } from "./tool-search";
 import "./tools"; // registers every tool
 
 const MAX_TOOL_ROUNDS = 8;
@@ -51,23 +52,6 @@ let toolCache: Anthropic.Tool[] | null = null;
 function anthropicTools(): Anthropic.Tool[] {
   toolCache ??= allTools().map((t) => ({ name: t.name, description: `[${t.module} · ${t.risk}] ${t.description}`, input_schema: toInputSchema(t.schema) as Anthropic.Tool.InputSchema }));
   return toolCache;
-}
-
-/**
- * Marks the end of the tool block as a prompt-cache breakpoint.
- *
- * This is the ONLY breakpoint in the request, which is what makes the tool block — and nothing else —
- * the cached prefix: the system prompt carries a to-the-second timestamp and the transcript grows every
- * turn, so both sit after it and are processed fresh regardless. Caching the ~27.5k tokens of tools is
- * what keeps the assistant able to reach all 144 without paying for them on every message.
- *
- * A mode with its own subset gets its own cache entry, stable for as long as that mode's list is.
- */
-function withCacheBreakpoint(tools: Anthropic.Tool[]): Anthropic.Tool[] {
-  if (!tools.length) return tools;
-  const out = tools.slice();
-  out[out.length - 1] = { ...out[out.length - 1], cache_control: { type: "ephemeral" } };
-  return out;
 }
 
 /** Test seam: the memoised tool block must not outlive a registry that changed. */
@@ -207,12 +191,11 @@ async function runChat(user: SessionUser, opts: { conversationId?: string | null
   const conv = await ensureConversation(user, opts.conversationId ?? null, opts.kind ?? "assistant", opts.text);
   emit({ type: "start", conversationId: conv.id });
   const [userMsg] = await db.insert(messages).values({ conversationId: conv.id, role: "user", text: opts.text, content: [{ type: "text", text: opts.text }] }).returning();
-  const system = await buildSystemPrompt(user, opts.systemExtra, opts.snapshotSections);
   /*
    * The tool surface is decided by the MODE, never by the message.
    *
    * Phase 3.16 measured what routing tools per message would cost. The cached prefix here is the tool
-   * block (the only `cache_control` breakpoint is on the last tool), so changing the tool set means
+   * block (the request's one `cache_control` breakpoint sits in it), so changing the tool set means
    * re-writing that block instead of reading it: 4-6x cheaper when the same subset comes back, but
    * 2-3x dearer on every topic switch, and a subset has to be reused 3-4 times inside one cache TTL
    * before it breaks even. On the assistant — where the next sentence can be about anything — that is a
@@ -223,7 +206,27 @@ async function runChat(user: SessionUser, opts: { conversationId?: string | null
    * enum, so nothing a user types can widen its surface.
    */
   const allowed = opts.allowedTools ?? toolsForMode(opts.kind ?? "assistant");
-  const tools = withCacheBreakpoint(allowed ? anthropicTools().filter((t) => allowed.includes(t.name)) : anthropicTools());
+  const available = allowed ? anthropicTools().filter((t) => allowed.includes(t.name)) : anthropicTools();
+
+  /*
+   * Native tool search (phase 3.17), off unless AI_TOOL_SEARCH names a variant. When it is on the whole
+   * catalogue is still SENT — `defer_loading` only decides what enters the model's context — and the
+   * cache breakpoint moves to the last non-deferred tool, because a deferred tool carrying
+   * `cache_control` is a 400. When it is off this is exactly the previous behaviour, and the reason is
+   * logged rather than silently swallowed.
+   */
+  const plan = planTools(available, { kind: opts.kind ?? "assistant", model: AI_MODEL() });
+  const tools = plan.tools;
+  if (plan.skipped && plan.skipped !== "disabled" && plan.skipped !== "mode_restricted") {
+    console.warn("[ai] tool search not used", { reason: plan.skipped, model: AI_MODEL(), tools: available.length });
+  }
+
+  // The prompt only mentions discovery when discovery is actually on; otherwise every tool is present
+  // and telling the model to go looking for them would be a lie.
+  const systemExtra = plan.variant
+    ? [opts.systemExtra, toolSearchPromptSection([...new Set(allTools().map((t) => t.module))].sort())].filter(Boolean).join("\n\n")
+    : opts.systemExtra;
+  const system = await buildSystemPrompt(user, systemExtra, opts.snapshotSections);
   const { messages: transcript, repaired } = await history(conv.id);
   if (repaired.length) console.warn("[ai] repaired a stored transcript before sending", { conversationId: conv.id, repaired });
   const actions: ExecutedAction[] = [];
@@ -271,7 +274,13 @@ async function runChat(user: SessionUser, opts: { conversationId?: string | null
     if (cutOff) console.warn("[ai] turn stopped mid tool call", { conversationId: conv.id, stopReason: res.stop_reason, dropped: toolUses.map((t) => t.name) });
     // The notice is written into the message, not just returned, so a reload shows the same thing the
     // live turn showed — and so the model can see, next turn, that its own turn was cut off.
-    const content = cutOff ? [...res.content.filter((b) => b.type !== "tool_use"), { type: "text" as const, text: STOPPED_SHORT }] : res.content;
+    // Dropping the dangling `tool_use` is phase 3.14's rule. A `server_tool_use` whose
+    // `tool_search_tool_result` never arrived is the same problem one layer up — the provider owns that
+    // pair, and half of it is not replayable — so it goes too.
+    const answeredSearches = new Set(res.content.filter((b) => b.type === "tool_search_tool_result").map((b) => (b as Anthropic.ToolSearchToolResultBlock).tool_use_id));
+    const content = cutOff
+      ? [...res.content.filter((b) => b.type !== "tool_use" && !(b.type === "server_tool_use" && !answeredSearches.has((b as Anthropic.ServerToolUseBlock).id))), { type: "text" as const, text: STOPPED_SHORT }]
+      : res.content;
     const shownText = cutOff ? [text, STOPPED_SHORT].filter(Boolean).join("\n\n") : text;
 
     const [assistantMsg] = await db.insert(messages).values({ conversationId: conv.id, role: "assistant", text: shownText, content, inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens }).returning();

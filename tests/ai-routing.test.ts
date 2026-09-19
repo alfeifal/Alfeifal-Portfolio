@@ -191,13 +191,13 @@ describe("nothing a user types can change which tools exist", () => {
 
 /** A stand-in model that records the tool set it was handed, then answers in one line. */
 function recordingClient() {
-  const seen: { count: number; names: string[] }[] = [];
+  const seen: { count: number; names: string[]; raw: { name?: string; cache_control?: unknown; defer_loading?: boolean }[] }[] = [];
   const build = () => ({ id: "m", content: [{ type: "text", text: "listo" }], stop_reason: "end_turn", usage: { input_tokens: 5, output_tokens: 3 } });
   const client = {
     messages: {
-      async create(p: { tools?: { name: string }[] }) { seen.push({ count: p.tools?.length ?? 0, names: (p.tools ?? []).map((t) => t.name) }); return build(); },
+      async create(p: { tools?: { name: string }[] }) { seen.push({ count: p.tools?.length ?? 0, names: (p.tools ?? []).map((t) => t.name), raw: (p.tools ?? []) as never }); return build(); },
       stream(p: { tools?: { name: string }[] }) {
-        seen.push({ count: p.tools?.length ?? 0, names: (p.tools ?? []).map((t) => t.name) });
+        seen.push({ count: p.tools?.length ?? 0, names: (p.tools ?? []).map((t) => t.name), raw: (p.tools ?? []) as never });
         const s = { on() { return s; }, async finalMessage() { return build(); } };
         return s;
       },
@@ -261,16 +261,17 @@ d("the tool set that actually leaves the server", () => {
     }
   });
 
-  it("the cache breakpoint is still on the last tool of whatever set went out", async () => {
-    const { client, seen } = recordingClient();
-    void seen;
-    const withBreakpoint = recordingClient();
-    await run(u, { text: "hola", kind: QUICK_ENTRY.kind, client: withBreakpoint.client });
-    void client;
-    // The block is filtered, not rebuilt, so the breakpoint lands on the subset's last entry and each
-    // mode keeps its own stable cached prefix.
-    const agent = read("src/server/ai/agent.ts");
-    expect(agent).toMatch(/withCacheBreakpoint\(allowed \? anthropicTools\(\)\.filter/);
+  it("exactly one tool carries the cache breakpoint, whatever set went out", async () => {
+    // Asserted on the request rather than on the source: phase 3.17 replaced the helper that used to
+    // place it, and what matters is that each mode still ships one stable cached prefix.
+    for (const kind of [undefined, QUICK_ENTRY.kind, "planner"]) {
+      const { client, seen } = recordingClient();
+      await run(u, { text: "hola", ...(kind ? { kind } : {}), client });
+      const cached = seen[0].raw.filter((t) => t.cache_control);
+      expect(cached, String(kind)).toHaveLength(1);
+      // A deferred tool carrying cache_control is a 400, so the breakpoint may never land on one.
+      expect(cached[0].defer_loading, String(kind)).toBeFalsy();
+    }
   });
 
   it("every mode's set is stable across requests — the point of scoping by mode", async () => {
