@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z, type ZodType } from "zod";
 import { getCurrentUser, isAdmin, type SessionUser } from "@/server/auth/session";
+import { isTrustedOrigin } from "@/server/security/origin";
 import { rateLimit, LIMITS } from "@/server/security/rate-limit";
 
 export class AppError extends Error {
@@ -54,6 +55,12 @@ type Handler<P> = (req: Request, ctx: { user: SessionUser; params: P }) => Promi
 export function withAuth<P = Record<string, string>>(handler: Handler<P>, opts: { limit?: keyof typeof LIMITS } = {}) {
   return async (req: Request, ctx?: Ctx<P>) => {
     try {
+      // Before anything else that costs a query: a state-changing request must come from this app.
+      // `SameSite=Lax` already stops a cross-site form or fetch from carrying the session cookie, but
+      // it is one setting, applied by the browser, with a long history of per-browser exceptions — and
+      // the requests behind this wrapper now include "delete that account and everything in it". The
+      // origin check is the second lock, and it was written for exactly this and then never wired up.
+      if (!isTrustedOrigin(req)) return NextResponse.json({ error: "Request blocked" }, { status: 403 });
       const user = await getCurrentUser();
       if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       const l = LIMITS[opts.limit ?? "api"];

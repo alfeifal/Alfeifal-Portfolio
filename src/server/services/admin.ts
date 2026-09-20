@@ -1,13 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { and, count, desc, eq, ne } from "drizzle-orm";
+import { and, count, desc, eq, gt, ilike, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/server/db";
-import { users } from "@/server/db/schema";
+import * as schema from "@/server/db/schema";
+import { sessions, users } from "@/server/db/schema";
 import { AppError, badRequest, notFound } from "@/server/http";
+import { hashPassword } from "@/server/auth/password";
 import { audit } from "@/server/audit";
 import { destroyAllSessions } from "@/server/auth/session";
 import { insertUser, signupSchema } from "./users";
 import { bootstrapUserData } from "./bootstrap";
+import { deleteAccountAndData } from "./export";
 
 /**
  * Account administration.
@@ -34,8 +37,45 @@ export const adminUserColumns = {
 };
 export type AdminUser = { [K in keyof typeof adminUserColumns]: (typeof adminUserColumns)[K]["_"]["data"] };
 
-export function listUsers() {
-  return db.select(adminUserColumns).from(users).orderBy(desc(users.createdAt));
+/**
+ * Escapes the characters `ILIKE` treats as wildcards, so a search for `100%` looks for the text
+ * `100%` instead of matching every row. Without this a user could not be found by any name or address
+ * containing `%` or `_`, and `%` alone would silently mean "everything".
+ */
+const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => "\\" + c);
+
+export const listUsersSchema = z.object({ q: z.string().max(200).optional() });
+
+/**
+ * The account list, optionally narrowed by a substring of the name or the email address.
+ *
+ * Search exists because the panel is a list with no paging: at two accounts it is decoration, at fifty
+ * it is the only way to find one. It matches the two identifiers an administrator actually knows —
+ * never anything from inside an account.
+ */
+export function listUsers(opts: { q?: string } = {}) {
+  const q = opts.q?.trim();
+  const rows = db.select(adminUserColumns).from(users);
+  if (!q) return rows.orderBy(desc(users.createdAt));
+  const pattern = `%${likeEscape(q)}%`;
+  return rows.where(or(ilike(users.name, pattern), ilike(users.email, pattern))).orderBy(desc(users.createdAt));
+}
+
+/**
+ * How many live sessions each account holds, so "revoke sessions" can say what it is about to end and
+ * an administrator can see at a glance that a deactivated account really is signed out everywhere.
+ *
+ * A count of rows in `sessions`, nothing more: no token, no IP, no user agent, no hint of what anybody
+ * did with the session. Expired rows are excluded rather than waited on — the cron purges them nightly,
+ * but a session that expired an hour ago is already dead and would otherwise be reported as live.
+ */
+export async function sessionCounts(): Promise<Record<string, number>> {
+  const rows = await db
+    .select({ userId: sessions.userId, n: count() })
+    .from(sessions)
+    .where(gt(sessions.expiresAt, new Date()))
+    .groupBy(sessions.userId);
+  return Object.fromEntries(rows.map((r) => [r.userId, Number(r.n)]));
 }
 
 export async function getUser(id: string) {
@@ -100,6 +140,119 @@ export async function setUserRole(admin: { id: string }, id: string, role: "admi
   await db.update(users).set({ role, updatedAt: new Date() }).where(eq(users.id, id));
   await audit({ userId: admin.id, actor: "user", action: "admin.user.role", entityType: "user", entityId: id, metadata: { email: target.email, from: target.role, to: role }, ip });
   return getUser(id);
+}
+
+/**
+ * Issues a fresh temporary password.
+ *
+ * This is the whole password recovery story on this instance, and it is deliberate: there is no email
+ * infrastructure here, so there is no reset link to send and pretending otherwise would be worse than
+ * having nothing. Somebody who cannot get in asks the administrator, who hands over a new password on
+ * a channel they both trust — exactly the flow account creation already uses.
+ *
+ * Three things happen together, and all three matter: the old hash is replaced, so whatever the account
+ * had is void; `mustChangePassword` is set, so this password can only be used to choose another one;
+ * and every live session is destroyed, because a reset whose point is "I have lost control of this
+ * account" is worthless if the sessions that control it survive.
+ *
+ * The new password is returned once and is never logged, never audited and never stored unhashed.
+ */
+export async function resetUserPassword(admin: { id: string }, id: string, ip?: string | null) {
+  const target = await getUser(id);
+  const password = temporaryPassword();
+  await db
+    .update(users)
+    .set({ passwordHash: await hashPassword(password), mustChangePassword: true, updatedAt: new Date() })
+    .where(eq(users.id, id));
+  await destroyAllSessions(id);
+  await audit({ userId: admin.id, actor: "user", action: "admin.user.password_reset", entityType: "user", entityId: id, metadata: { email: target.email }, ip });
+  return { user: await getUser(id), temporaryPassword: password };
+}
+
+/**
+ * Ends every live session without touching the account otherwise.
+ *
+ * Deactivation already does this, but deactivation is a punishment for the account; this is for the
+ * ordinary case of a lost laptop or a shared computer, where the account is fine and only its open
+ * sessions are the problem. The owner signs in again with the password they already have.
+ *
+ * Refused on yourself: it would sign you out of the very page you clicked it on, and Settings already
+ * offers "sign out other devices", which does the same thing while keeping you where you are.
+ */
+export async function revokeUserSessions(admin: { id: string }, id: string, ip?: string | null) {
+  const target = await getUser(id);
+  if (target.id === admin.id) throw badRequest("Use Settings to sign out your own other devices");
+  const before = (await sessionCounts())[id] ?? 0;
+  await destroyAllSessions(id);
+  await audit({ userId: admin.id, actor: "user", action: "admin.user.sessions_revoke", entityType: "user", entityId: id, metadata: { email: target.email, sessions: before }, ip });
+  return { user: target, revoked: before };
+}
+
+/**
+ * Every table that dies with the account, in the order the UI reads best.
+ *
+ * This list is what makes deletion honest: the confirmation names what is about to be destroyed, and
+ * it can only do that from real counts. It is checked against the schema by a test, so a table added
+ * later cannot quietly go unmentioned while still being deleted.
+ */
+const DELETION_TABLES = [
+  ["Tasks", schema.tasks], ["Calendar events", schema.events], ["Goals", schema.goals],
+  ["Milestones", schema.milestones], ["Projects", schema.projects], ["Journal entries", schema.journalEntries],
+  ["Transactions", schema.transactions], ["Accounts", schema.accounts], ["Budgets", schema.budgets],
+  ["Savings goals", schema.savingsGoals], ["Recurring transactions", schema.recurringTransactions],
+  ["Investment transactions", schema.investmentTransactions], ["Portfolio snapshots", schema.portfolioSnapshots],
+  ["Trades", schema.trades], ["Watchlist items", schema.watchlistItems], ["Price alerts", schema.priceAlerts],
+  ["Workout sessions", schema.workoutSessions], ["Sets logged", schema.workoutSets], ["Personal records", schema.personalRecords],
+  ["Nutrition entries", schema.nutritionEntries], ["Study sessions", schema.studySessions],
+  ["Assignments", schema.assignments], ["Exams", schema.exams], ["German events", schema.germanEvents],
+  ["Reviews", schema.aiReports], ["Assistant memories", schema.aiMemory], ["Assistant actions", schema.aiActionLogs],
+  ["Conversations", schema.conversations], ["Notifications", schema.notifications],
+] as const;
+
+/**
+ * What deleting this account would destroy, as row counts per module.
+ *
+ * Counts, never contents. An administrator may know that an account has 412 transactions — that is the
+ * consequence of the button they are about to press, and refusing to say it would only mean deleting
+ * blind. They still cannot see a single one of them, here or anywhere else in the panel.
+ *
+ * Rows with nothing in them are dropped, so the confirmation lists what actually exists.
+ */
+export async function deletionSummary(id: string) {
+  const user = await getUser(id);
+  const counts = await Promise.all(
+    DELETION_TABLES.map(async ([label, table]) => {
+      const [{ n }] = await db.select({ n: count() }).from(table).where(eq(table.userId, id));
+      return { label, n: Number(n) };
+    }),
+  );
+  const items = counts.filter((c) => c.n > 0);
+  return { user, items, total: items.reduce((a, c) => a + c.n, 0) };
+}
+
+/**
+ * Deletes an account and everything that cascades from it. There is no undo and no recycle bin.
+ *
+ * The two refusals mirror the ones already on deactivation and demotion, because a delete that walked
+ * past them would reach the same dead end by a different road: you cannot delete yourself from here
+ * (Settings does that, behind your own password, which is the consent this page cannot ask for), and
+ * you cannot remove the last active administrator, which would leave the instance with accounts nobody
+ * can administer.
+ *
+ * The audit row is written first and belongs to the *administrator*, so it survives the deletion that
+ * would have cascaded away a row belonging to the target.
+ */
+export async function deleteUserAsAdmin(admin: { id: string }, id: string, ip?: string | null) {
+  const target = await getUser(id);
+  if (target.id === admin.id) throw badRequest("Delete your own account from Settings, where it asks for your password");
+  if (target.role === "admin" && target.isActive && (await activeAdminCount()) <= 1) throw badRequest("This is the last active administrator");
+  const summary = await deletionSummary(id);
+  await audit({
+    userId: admin.id, actor: "user", action: "admin.user.delete", entityType: "user", entityId: id,
+    metadata: { email: target.email, role: target.role, rows: summary.total }, ip,
+  });
+  await deleteAccountAndData(id);
+  return { deleted: { id: target.id, email: target.email }, rows: summary.total };
 }
 
 /** Guards the two ways an instance could be left with nobody able to administer it. */

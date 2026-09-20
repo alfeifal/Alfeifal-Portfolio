@@ -1,33 +1,54 @@
 "use client";
-import { useState } from "react";
-import { Copy, ShieldCheck, UserPlus } from "lucide-react";
-import { Badge, Button, Card, ConfirmDialog, ErrorBox, Field, Modal, PageHeader, SkeletonList, Stat } from "@/components/ui";
+import { useEffect, useMemo, useState } from "react";
+import { Copy, KeyRound, LogOut, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { Badge, Button, Card, ConfirmDialog, Empty, ErrorBox, Field, Modal, PageHeader, SkeletonList, Stat } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { api, fmtDate, useApi } from "@/lib/client";
 
 export interface AdminUser {
   id: string; email: string; name: string; role: "admin" | "user"; isActive: boolean;
-  deactivatedAt: string | null; lastLoginAt: string | null; timezone: string; currency: string; createdAt: string;
+  deactivatedAt: string | null; lastLoginAt: string | null; mustChangePassword: boolean;
+  timezone: string; currency: string; createdAt: string;
 }
-export interface Payload { users: AdminUser[]; stats: { total: number; active: number; admins: number; users: number } }
+export interface Payload {
+  users: AdminUser[];
+  stats: { total: number; active: number; admins: number; users: number };
+  /** Live sessions per account id. Counts only — never a token, an address or a device. */
+  sessions: Record<string, number>;
+}
+interface DeletionSummary { user: AdminUser; items: { label: string; n: number }[]; total: number }
 
 const EMPTY_FORM = { email: "", name: "", role: "user" as "admin" | "user", timezone: "", currency: "" };
 
 /**
- * Accounts, not data. Everything on this screen comes from `/api/admin/users`, which returns the user
- * rows and nothing that belongs to them — no tasks, no money, no training, no memory.
+ * Accounts, not data. Everything on this screen comes from `/api/admin/*`, which returns the user rows
+ * and — only when a deletion is being confirmed — row *counts* for the account about to be destroyed.
+ * No task, no amount, no workout, no memory ever reaches this page.
  *
- * The generated password is shown once, right after the account is created, and is never fetched
- * again: the list endpoint does not return it and the server only ever stored its hash.
+ * A generated password (at creation or at reset) is shown once and never fetched again: the list
+ * endpoint does not return it and the server only ever stored its hash.
  */
 export function AdminClient({ initial, meId }: { initial: Payload; meId: string }) {
-  const { data, error, loading, refresh, reload } = useApi<Payload>("/api/admin/users", [], initial);
+  const [query, setQuery] = useState("");
+  const [q, setQ] = useState("");
+  // Debounced so typing a name is one request, not one per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setQ(query.trim()), 250);
+    return () => clearTimeout(t);
+  }, [query]);
+  const path = useMemo(() => (q ? `/api/admin/users?q=${encodeURIComponent(q)}` : "/api/admin/users"), [q]);
+  const { data, error, loading, refresh, reload } = useApi<Payload>(path, [], q ? undefined : initial);
   const toast = useToast();
+
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
-  const [created, setCreated] = useState<{ user: AdminUser; temporaryPassword: string | null } | null>(null);
-  const [pending, setPending] = useState<AdminUser | null>(null);
+  /** The one-time secret panel, shared by account creation and password reset. */
+  const [issued, setIssued] = useState<{ user: AdminUser; password: string; reason: "created" | "reset" } | null>(null);
+  const [deactivating, setDeactivating] = useState<AdminUser | null>(null);
+  const [revoking, setRevoking] = useState<AdminUser | null>(null);
+  const [resetting, setResetting] = useState<AdminUser | null>(null);
+  const [deleting, setDeleting] = useState<{ user: AdminUser; summary: DeletionSummary | null } | null>(null);
 
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,7 +58,7 @@ export function AdminClient({ initial, meId }: { initial: Payload; meId: string 
       const res = await api<{ user: AdminUser; temporaryPassword: string | null }>("/api/admin/users", { method: "POST", json: body });
       setOpen(false);
       setForm(EMPTY_FORM);
-      setCreated(res);
+      if (res.temporaryPassword) setIssued({ user: res.user, password: res.temporaryPassword, reason: "created" });
       refresh();
       toast.success("Account created", `${res.user.email} can sign in now`);
     } catch (err) {
@@ -57,9 +78,51 @@ export function AdminClient({ initial, meId }: { initial: Payload; meId: string 
     }
   };
 
+  const resetPassword = async (u: AdminUser) => {
+    try {
+      const res = await api<{ user: AdminUser; temporaryPassword: string }>(`/api/admin/users/${u.id}/password`, { method: "POST" });
+      setIssued({ user: res.user, password: res.temporaryPassword, reason: "reset" });
+      refresh();
+      toast.success("New password issued", `${u.email} is signed out everywhere`);
+    } catch (err) {
+      toast.error("Password not reset", (err as Error).message);
+    }
+  };
+
+  const revokeSessions = async (u: AdminUser) => {
+    try {
+      const res = await api<{ revoked: number }>(`/api/admin/users/${u.id}/sessions`, { method: "DELETE" });
+      refresh();
+      toast.success(res.revoked === 1 ? "1 session ended" : `${res.revoked} sessions ended`, u.email);
+    } catch (err) {
+      toast.error("Sessions not revoked", (err as Error).message);
+    }
+  };
+
+  /** Opens the confirmation, then loads what the deletion would destroy so the dialog can name it. */
+  const askDelete = async (u: AdminUser) => {
+    setDeleting({ user: u, summary: null });
+    try {
+      setDeleting({ user: u, summary: await api<DeletionSummary>(`/api/admin/users/${u.id}/deletion-summary`) });
+    } catch (err) {
+      toast.error("Could not read what would be deleted", (err as Error).message);
+      setDeleting(null);
+    }
+  };
+
+  const doDelete = async (u: AdminUser) => {
+    try {
+      await api(`/api/admin/users/${u.id}`, { method: "DELETE" });
+      refresh();
+      toast.success("Account deleted", `${u.email} and all of its data are gone`);
+    } catch (err) {
+      toast.error("Account not deleted", (err as Error).message);
+    }
+  };
+
   if (error) return <ErrorBox error={error} retry={reload} />;
   if (!data) return loading ? <SkeletonList rows={6} /> : null;
-  const { users, stats } = data;
+  const { users, stats, sessions } = data;
 
   return (
     <div className="space-y-4">
@@ -76,29 +139,45 @@ export function AdminClient({ initial, meId }: { initial: Payload; meId: string 
         <Stat label="Users" count={stats.users} />
       </div>
 
-      {created && (
-        <Card title="Temporary password" className="border-accent/40">
+      {issued && (
+        <Card title={issued.reason === "created" ? "Temporary password" : "New temporary password"} className="border-accent/40">
           <p className="text-sm">
-            Give this to <span className="font-medium">{created.user.email}</span> over a channel you trust. It is shown once and cannot be recovered — if it is lost, create a new one by setting a password for the account.
+            Give this to <span className="font-medium">{issued.user.email}</span> over a channel you trust. It is shown once and cannot be recovered — if it is lost, issue another one.
+            {issued.reason === "reset" && " Their old password no longer works and they have been signed out everywhere."}
           </p>
-          {created.temporaryPassword && (
-            <div className="mt-2 flex items-center gap-2">
-              <code className="flex-1 truncate rounded-lg bg-surface-2 px-3 py-2 font-mono text-sm">{created.temporaryPassword}</code>
-              <Button
-                icon={<Copy size={14} />}
-                onClick={() => { navigator.clipboard?.writeText(created.temporaryPassword!).then(() => toast.success("Copied"), () => toast.error("Could not copy")); }}
-              >
-                Copy
-              </Button>
-            </div>
-          )}
-          <Button className="mt-2" size="sm" onClick={() => setCreated(null)}>Done</Button>
+          <div className="mt-2 flex items-center gap-2">
+            <code className="flex-1 truncate rounded-lg bg-surface-2 px-3 py-2 font-mono text-sm">{issued.password}</code>
+            <Button
+              icon={<Copy size={14} />}
+              onClick={() => { navigator.clipboard?.writeText(issued.password).then(() => toast.success("Copied"), () => toast.error("Could not copy")); }}
+            >
+              Copy
+            </Button>
+          </div>
+          <Button className="mt-2" size="sm" onClick={() => setIssued(null)}>Done</Button>
         </Card>
       )}
 
-      <Card title={`Accounts (${users.length})`}>
+      <Card
+        title={q ? `Accounts matching “${q}” (${users.length})` : `Accounts (${users.length})`}
+        action={
+          <div className="relative">
+            <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 muted" />
+            <input
+              className="field !py-1.5 !pl-8 w-44 sm:w-56"
+              placeholder="Search name or email"
+              aria-label="Search accounts by name or email"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+        }
+      >
+        {users.length === 0 ? (
+          <Empty title="No account matches">Nothing here is named or addressed like that.</Empty>
+        ) : (
         <div className="-mx-1 overflow-x-auto">
-          <table className="w-full min-w-[46rem] text-sm">
+          <table className="w-full min-w-[56rem] text-sm">
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wider muted">
                 <th className="px-1 pb-2 font-medium">Name</th>
@@ -107,6 +186,7 @@ export function AdminClient({ initial, meId }: { initial: Payload; meId: string 
                 <th className="px-1 pb-2 font-medium">Status</th>
                 <th className="px-1 pb-2 font-medium">Created</th>
                 <th className="px-1 pb-2 font-medium">Last login</th>
+                <th className="px-1 pb-2 font-medium">Sessions</th>
                 <th className="px-1 pb-2 text-right font-medium">Actions</th>
               </tr>
             </thead>
@@ -121,19 +201,31 @@ export function AdminClient({ initial, meId }: { initial: Payload; meId: string 
                   <td className="px-1 py-2">
                     {u.role === "admin" ? <Badge tone="accent"><ShieldCheck size={11} className="mr-1 inline" />Admin</Badge> : <Badge>User</Badge>}
                   </td>
-                  <td className="px-1 py-2">{u.isActive ? <Badge tone="positive">Active</Badge> : <Badge tone="negative">Deactivated</Badge>}</td>
+                  <td className="px-1 py-2">
+                    <div className="flex flex-wrap gap-1">
+                      {u.isActive ? <Badge tone="positive">Active</Badge> : <Badge tone="negative">Deactivated</Badge>}
+                      {/* Tells the administrator whether the password they handed over has been used yet. */}
+                      {u.mustChangePassword && <Badge tone="warning">Password pending</Badge>}
+                    </div>
+                  </td>
                   <td className="px-1 py-2 tnum muted">{fmtDate(u.createdAt)}</td>
                   <td className="px-1 py-2 tnum muted">{u.lastLoginAt ? fmtDate(u.lastLoginAt) : "never"}</td>
+                  <td className="px-1 py-2 tnum muted">{sessions[u.id] ?? 0}</td>
                   <td className="px-1 py-2">
-                    <div className="flex justify-end gap-1.5">
+                    <div className="flex flex-wrap justify-end gap-1.5">
                       <Button size="sm" disabled={u.id === meId} onClick={() => patch(u, { role: u.role === "admin" ? "user" : "admin" }, u.role === "admin" ? "Administrator role removed" : "Administrator role granted")}>
                         {u.role === "admin" ? "Make user" : "Make admin"}
                       </Button>
+                      <Button size="sm" icon={<KeyRound size={13} />} onClick={() => setResetting(u)}>Reset password</Button>
+                      <Button size="sm" icon={<LogOut size={13} />} disabled={u.id === meId || !(sessions[u.id] ?? 0)} onClick={() => setRevoking(u)}>
+                        Revoke sessions
+                      </Button>
                       {u.isActive ? (
-                        <Button size="sm" variant="danger" disabled={u.id === meId} onClick={() => setPending(u)}>Deactivate</Button>
+                        <Button size="sm" variant="danger" disabled={u.id === meId} onClick={() => setDeactivating(u)}>Deactivate</Button>
                       ) : (
                         <Button size="sm" onClick={() => patch(u, { isActive: true }, "Account reactivated")}>Reactivate</Button>
                       )}
+                      <Button size="sm" variant="danger" icon={<Trash2 size={13} />} disabled={u.id === meId} onClick={() => askDelete(u)}>Delete</Button>
                     </div>
                   </td>
                 </tr>
@@ -141,8 +233,9 @@ export function AdminClient({ initial, meId }: { initial: Payload; meId: string 
             </tbody>
           </table>
         </div>
+        )}
         <p className="mt-3 text-xs muted">
-          Deactivating keeps every row the account owns and signs it out everywhere; it simply cannot log in again until it is reactivated. Nothing here gives an administrator access to another account&apos;s data.
+          Deactivating keeps every row the account owns and signs it out everywhere; it simply cannot log in again until it is reactivated. Deleting destroys the account and all of its data, permanently. Resetting a password is the only recovery path on this instance — there is no email here, so there is no reset link to send. Nothing on this page gives an administrator access to another account&apos;s data.
         </p>
       </Card>
 
@@ -170,12 +263,63 @@ export function AdminClient({ initial, meId }: { initial: Payload; meId: string 
       </Modal>
 
       <ConfirmDialog
-        open={!!pending}
-        onClose={() => setPending(null)}
-        onConfirm={async () => { if (pending) await patch(pending, { isActive: false }, "Account deactivated"); }}
+        open={!!deactivating}
+        onClose={() => setDeactivating(null)}
+        onConfirm={async () => { if (deactivating) await patch(deactivating, { isActive: false }, "Account deactivated"); }}
         title="Deactivate this account?"
-        description={pending ? `${pending.email} will be signed out everywhere and will not be able to log in. All of their data is kept.` : undefined}
+        description={deactivating ? `${deactivating.email} will be signed out everywhere and will not be able to log in. All of their data is kept.` : undefined}
         confirmLabel="Deactivate"
+      />
+
+      <ConfirmDialog
+        open={!!revoking}
+        onClose={() => setRevoking(null)}
+        onConfirm={async () => { if (revoking) await revokeSessions(revoking); }}
+        title="End every session?"
+        description={revoking ? `${revoking.email} will be signed out on all ${sessions[revoking.id] ?? 0} of their devices. They can sign straight back in with the password they already have — this does not change it.` : undefined}
+        confirmLabel="Revoke sessions"
+      />
+
+      <ConfirmDialog
+        open={!!resetting}
+        onClose={() => setResetting(null)}
+        onConfirm={async () => { if (resetting) await resetPassword(resetting); }}
+        title="Issue a new password?"
+        description={resetting ? `${resetting.email}'s current password stops working immediately and they are signed out everywhere. You will be shown a temporary password once, to give them; they must replace it before they can use the app.` : undefined}
+        confirmLabel="Issue password"
+      />
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        onConfirm={async () => { if (deleting) await doDelete(deleting.user); }}
+        title="Delete this account and all of its data?"
+        description={
+          deleting ? (
+            <div className="space-y-2">
+              <p>
+                <span className="font-medium">{deleting.user.email}</span> will be erased. This cannot be undone and there is no backup here to restore from.
+              </p>
+              {deleting.summary === null ? (
+                <p className="muted">Counting what would be deleted…</p>
+              ) : deleting.summary.total === 0 ? (
+                <p className="muted">This account has no data of its own beyond the defaults it started with.</p>
+              ) : (
+                <>
+                  <p className="muted">{deleting.summary.total} records will be destroyed:</p>
+                  <ul className="grid grid-cols-2 gap-x-4 text-xs tnum">
+                    {deleting.summary.items.map((i) => (
+                      <li key={i.label} className="flex justify-between gap-2 border-b border-border/50 py-0.5">
+                        <span className="muted">{i.label}</span><span>{i.n}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          ) : undefined
+        }
+        confirmLabel="Delete permanently"
       />
     </div>
   );

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { isAdmin } from "@/server/auth/session";
 import { requireUser, asJson } from "@/server/page-data";
-import { adminStats, listUsers } from "@/server/services/admin";
+import { adminStats, listUsers, sessionCounts } from "@/server/services/admin";
 import { AdminClient, type Payload } from "./admin-client";
 
 /**
@@ -18,7 +18,7 @@ import { AdminClient, type Payload } from "./admin-client";
 export default async function AdminPage() {
   const user = await requireUser();
   if (!isAdmin(user)) notFound();
-  const [users, stats] = await Promise.all([listUsers(), adminStats()]);
+  const [users, stats, sessions] = await Promise.all([listUsers(), adminStats(), sessionCounts()]);
   // `asJson` is what the API would return, so the dates arrive as the strings the client expects.
-  return <AdminClient initial={asJson({ users, stats }) as unknown as Payload} meId={user.id} />;
+  return <AdminClient initial={asJson({ users, stats, sessions }) as unknown as Payload} meId={user.id} />;
 }

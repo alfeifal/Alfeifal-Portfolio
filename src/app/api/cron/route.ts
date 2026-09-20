@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/server/db";
 import { users } from "@/server/db/schema";
@@ -18,7 +19,13 @@ export async function POST(req: Request) {
   const auth = req.headers.get("authorization") ?? "";
   const given = auth.replace(/^Bearer\s+/i, "");
   if (!secret || given.length !== secret.length || !timingSafeEqual(Buffer.from(given), Buffer.from(secret))) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const all = await db.select().from(users);
+  // Only accounts that can still sign in. A deactivated account keeps every row it owns, but nothing
+  // may keep *writing* to it behind its back: without this filter the nightly run would go on posting
+  // its recurring transactions, raising its notifications, firing its price alerts and appending
+  // portfolio snapshots to an account whose owner has no way to look at any of it, let alone stop it.
+  // Reactivating resumes the schedule; it does not backfill the nights that were skipped, which is the
+  // honest behaviour — those days genuinely had no account behind them.
+  const all = await db.select().from(users).where(eq(users.isActive, true));
   const report: Record<string, unknown> = { users: all.length };
   report.news = await refreshNews(true).catch((e) => `failed: ${(e as Error).message}`);
   await purgeExpiredSessions();
