@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
 /**
@@ -193,6 +193,69 @@ export const aiReports = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("ai_reports_user_kind_idx").on(t.userId, t.kind, t.periodKey)],
+);
+
+/**
+ * Shared rate-limit counters.
+ *
+ * The limiter used to be a `Map` in one process, which on a serverless platform means every instance
+ * keeps its own tally: the real ceiling was the configured limit multiplied by however many instances
+ * happened to be warm, which is neither knowable nor stable. This table is the shared tally.
+ *
+ * A row is one bucket in one fixed window. The limiter reads the previous window too and weights it
+ * by how far the current one has advanced, so a burst straddling a boundary is not forgiven — see
+ * `src/server/security/rate-limit.ts`. Rows are disposable: nothing reads them after their window has
+ * rolled past, and the daily maintenance job deletes them.
+ */
+export const rateLimits = pgTable(
+  "rate_limits",
+  {
+    bucket: text("bucket").notNull(),
+    /** Start of the fixed window this row counts, truncated to the window length. */
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    hits: integer("hits").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.bucket, t.windowStart] }), index("rate_limits_window_idx").on(t.windowStart)],
+);
+
+/**
+ * Durable record of what each account spends on the assistant.
+ *
+ * It exists because the obvious source cannot be one. `ai_messages` carries the token counts, but it
+ * has no `user_id` — it hangs off `ai_conversations` — and a conversation is hard-deleted 24 h after
+ * its last message, taking its messages with it. Any total computed from there silently loses every
+ * period older than a day. This table hangs off `users` instead, so it outlives the transcripts it
+ * describes, and it is the only place that survives the purge.
+ *
+ * It also records what `ai_messages` never had room for: cache reads and cache writes are separate
+ * columns because they are priced differently from ordinary input, so a total that folds them in is
+ * wrong in both directions.
+ *
+ * One row per account, per day, per conversation kind. Counts only — no prompt, no reply, no title,
+ * nothing anybody wrote. An administrator can see that an account spent 40k tokens on Tuesday and
+ * still cannot see a single word of it.
+ */
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    /** Local calendar day for the account's own timezone, `YYYY-MM-DD`. Grouped by prefix for a month. */
+    day: text("day").notNull(),
+    /** assistant | quick_entry | planner | daily_review | … — the conversation kind, never its content. */
+    kind: text("kind").notNull(),
+    /** Provider round trips, which is what a quota would most naturally be expressed in. */
+    requests: integer("requests").notNull().default(0),
+    inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
+    outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
+    cacheReadTokens: bigint("cache_read_tokens", { mode: "number" }).notNull().default(0),
+    cacheWriteTokens: bigint("cache_write_tokens", { mode: "number" }).notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("ai_usage_user_day_kind_idx").on(t.userId, t.day, t.kind),
+    index("ai_usage_day_idx").on(t.day),
+  ],
 );
 
 export const usersRelations = relations(users, ({ many }) => ({ sessions: many(sessions) }));

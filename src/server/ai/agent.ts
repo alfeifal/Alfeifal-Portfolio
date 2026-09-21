@@ -12,6 +12,7 @@ import { audit } from "@/server/audit";
 import { AppError } from "@/server/http";
 import { getPreferences } from "@/server/services/users";
 import { conversationExpiry, touchConversation } from "@/server/services/conversations";
+import { recordUsage } from "@/server/services/ai-usage";
 import { encodeEvent, turnOutcome, type ChatStreamEvent, type TurnOutcome } from "./stream";
 import { asUserFacingAiError, logAiError, safeAiMessage } from "./errors";
 import { assertSendable, blocksOf, repairTranscript, UNKNOWN_RESULT, type Recovered, type Violation } from "./transcript";
@@ -260,6 +261,16 @@ async function runChat(user: SessionUser, opts: { conversationId?: string | null
       cacheRead: usage.cacheRead + (res.usage.cache_read_input_tokens ?? 0),
       cacheWrite: usage.cacheWrite + (res.usage.cache_creation_input_tokens ?? 0),
     };
+    // Durable accounting, recorded per round rather than per turn so a turn that fails later still
+    // accounts for the provider calls it already made. `ai_messages` cannot serve this: it has no
+    // user id and it is deleted with its conversation after 24 h. `recordUsage` never throws.
+    await recordUsage(user.id, opts.kind ?? "assistant", {
+      requests: 1,
+      inputTokens: res.usage.input_tokens,
+      outputTokens: res.usage.output_tokens,
+      cacheReadTokens: res.usage.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: res.usage.cache_creation_input_tokens ?? 0,
+    }, user.timezone);
     const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("\n").trim();
     const toolUses = res.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
 

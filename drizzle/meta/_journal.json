@@ -50,6 +50,13 @@
       "when": 1789633327419,
       "tag": "0006_force_password_rotation",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789949853727,
+      "tag": "0007_shared_limits_and_ai_usage",
+      "breakpoints": true
     }
   ]
 }

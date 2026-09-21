@@ -19,7 +19,7 @@ Next.js 16
   ├─ app/api/*            REST route handlers: withAuth → zod → service → audit
   └─ server/
       ├─ auth/            scrypt passwords, DB-backed sessions (hashed tokens, sliding expiry)
-      ├─ security/        rate limiting, origin check
+      ├─ security/        rate limiting (shared counter in Postgres + in-memory fallback), origin check
       ├─ db/schema/*      Drizzle schema per domain (52 tables)
       ├─ services/*       ALL business logic, user-scoped, reused by API + AI tools + reports
       ├─ ai/              Anthropic client, tool registry (risk levels), agent loop, context, reports

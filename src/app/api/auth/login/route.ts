@@ -3,7 +3,8 @@ import { authenticate, loginSchema, recordLogin } from "@/server/services/users"
 import { createSession, requestMeta } from "@/server/auth/session";
 import { errorResponse, parseBody } from "@/server/http";
 import { isTrustedOrigin } from "@/server/security/origin";
-import { LIMITS, rateLimit } from "@/server/security/rate-limit";
+import { LIMITS } from "@/server/security/rate-limit";
+import { checkRateLimit } from "@/server/security/rate-limit-shared";
 import { audit } from "@/server/audit";
 
 export async function POST(req: Request) {
@@ -12,7 +13,7 @@ export async function POST(req: Request) {
     // an account they did not choose is a real attack even before there is a session to steal.
     if (!isTrustedOrigin(req)) return NextResponse.json({ error: "Request blocked" }, { status: 403 });
     const meta = await requestMeta();
-    const rl = rateLimit(`login:${meta.ip ?? "unknown"}`, LIMITS.login.limit, LIMITS.login.windowMs);
+    const rl = await checkRateLimit(`login:${meta.ip ?? "unknown"}`, LIMITS.login.limit, LIMITS.login.windowMs);
     if (!rl.ok) return NextResponse.json({ error: "Too many attempts. Try again later." }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } });
     const input = await parseBody(req, loginSchema);
     const user = await authenticate(input);

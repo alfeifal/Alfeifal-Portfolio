@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { z, type ZodType } from "zod";
 import { getCurrentUser, isAdmin, type SessionUser } from "@/server/auth/session";
 import { isTrustedOrigin } from "@/server/security/origin";
-import { rateLimit, LIMITS } from "@/server/security/rate-limit";
+import { LIMITS } from "@/server/security/rate-limit";
+import { checkRateLimit } from "@/server/security/rate-limit-shared";
 
 export class AppError extends Error {
   constructor(public status: number, message: string, public details?: unknown) {
@@ -64,7 +65,7 @@ export function withAuth<P = Record<string, string>>(handler: Handler<P>, opts: 
       const user = await getCurrentUser();
       if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       const l = LIMITS[opts.limit ?? "api"];
-      const rl = rateLimit(`${opts.limit ?? "api"}:${user.id}`, l.limit, l.windowMs);
+      const rl = await checkRateLimit(`${opts.limit ?? "api"}:${user.id}`, l.limit, l.windowMs);
       if (!rl.ok) return NextResponse.json({ error: "Too many requests" }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } });
       const gated = passwordGate(req, user);
       if (gated) return gated;

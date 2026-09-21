@@ -1,0 +1,52 @@
+name: Scheduled maintenance
+
+# Vercel's Hobby plan caps cron jobs at one run per day, and two jobs need more than that: a price
+# alert compares the live quote at the moment it runs, and a chat transcript past its 24 h TTL is
+# only gone once something deletes it. Daily, alerts would see one price a day and transcripts would
+# live up to 48 h. GitHub Actions is free and unmetered for public repositories, and its documented
+# floor is five minutes, so the frequent half runs here.
+#
+# `vercel.json` keeps its daily job, which runs *everything*. That is deliberate: scheduled workflows
+# in a public repository are disabled automatically after 60 days without repository activity, so the
+# daily pass is what keeps the app correct if this one ever stops. Nothing here is the only path.
+#
+# Scheduled workflows only ever run on the repository's DEFAULT branch, whatever branch this file is
+# committed to. Changing the default branch silently stops this schedule.
+#
+# Delivery is best effort in both directions: GitHub warns that "some queued jobs may be dropped"
+# under load and that schedules are delayed at the top of the hour. Every job behind this endpoint is
+# idempotent (see src/server/services/maintenance.ts), so a duplicate run is a no-op and a missed one
+# is made up by the next.
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *" # every 15 min, off the hour — the top of the hour is when Actions is most congested
+  workflow_dispatch: # so it can be run by hand without waiting for the schedule
+
+# One run at a time. Overlap would be harmless, but there is no reason to pay for it.
+concurrency:
+  group: scheduled-maintenance
+  cancel-in-progress: false
+
+jobs:
+  frequent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run the frequent maintenance jobs
+        env:
+          # The deployment's own URL, e.g. https://alfeifal-portfolio.vercel.app
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "APP_URL variable or CRON_SECRET secret is not configured" >&2
+            exit 1
+          fi
+          # --fail-with-body so a non-2xx fails the run and the body is still shown.
+          # The secret goes in a header from the environment and is never echoed; curl's own output
+          # never includes request headers without -v, which is why -v is not used here.
+          curl --silent --show-error --fail-with-body --max-time 120 \
+               --header "Authorization: Bearer ${CRON_SECRET}" \
+               "${APP_URL}/api/cron?scope=frequent"

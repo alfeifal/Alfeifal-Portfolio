@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { Copy, KeyRound, LogOut, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { Activity, Copy, KeyRound, LogOut, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { Badge, Button, Card, ConfirmDialog, Empty, ErrorBox, Field, Modal, PageHeader, SkeletonList, Stat } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { api, fmtDate, useApi } from "@/lib/client";
@@ -17,6 +17,71 @@ export interface Payload {
   sessions: Record<string, number>;
 }
 interface DeletionSummary { user: AdminUser; items: { label: string; n: number }[]; total: number }
+interface UsageTotals { requests: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
+interface UsageRow extends UsageTotals { userId: string; email: string; name: string }
+interface UsagePayload { from: string; totals: UsageTotals; users: UsageRow[] }
+
+const compact = (n: number) => (n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + "M" : n >= 1_000 ? (n / 1_000).toFixed(1) + "k" : String(n));
+
+/**
+ * Assistant usage per account.
+ *
+ * Five integers and a date, from a table that stores nothing else. An administrator can see that an
+ * account made 60 requests and spent 400k tokens this month, and still cannot see one word of what
+ * was asked or answered — there is no column here that could carry it.
+ *
+ * Cache reads and writes are shown apart from ordinary input because the provider prices them
+ * differently; adding them together would give a number that is wrong in both directions.
+ *
+ * There is no limit here, and no control that would set one. Usage has never been recorded before
+ * now, so there is nothing yet to justify a ceiling.
+ */
+function UsagePanel() {
+  const { data, error, loading } = useApi<UsagePayload>("/api/admin/usage");
+  if (error) return <Card title="Assistant usage"><p className="text-sm muted">{error}</p></Card>;
+  if (!data) return loading ? <SkeletonList rows={3} /> : null;
+  const { totals, users, from } = data;
+  const cols: { key: keyof UsageTotals; label: string }[] = [
+    { key: "requests", label: "Requests" },
+    { key: "inputTokens", label: "Input" },
+    { key: "outputTokens", label: "Output" },
+    { key: "cacheReadTokens", label: "Cache read" },
+    { key: "cacheWriteTokens", label: "Cache write" },
+  ];
+  return (
+    <Card title={<span className="inline-flex items-center gap-1.5"><Activity size={14} />Assistant usage since {from}</span>}>
+      {users.length === 0 ? (
+        <Empty title="No usage recorded yet">Counting started when this was deployed; nothing before that exists.</Empty>
+      ) : (
+        <div className="-mx-1 overflow-x-auto">
+          <table className="w-full min-w-[40rem] text-sm">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wider muted">
+                <th className="px-1 pb-2 font-medium">Account</th>
+                {cols.map((c) => <th key={c.key} className="px-1 pb-2 text-right font-medium">{c.label}</th>)}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {users.map((u) => (
+                <tr key={u.userId}>
+                  <td className="px-1 py-2 truncate">{u.email}</td>
+                  {cols.map((c) => <td key={c.key} className="px-1 py-2 text-right tnum">{compact(u[c.key])}</td>)}
+                </tr>
+              ))}
+              <tr className="font-medium">
+                <td className="px-1 py-2">All accounts</td>
+                {cols.map((c) => <td key={c.key} className="px-1 py-2 text-right tnum">{compact(totals[c.key])}</td>)}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="mt-3 text-xs muted">
+        Token counts only. This never shows what was asked or answered, and no per-account limit is in force — usage is being measured, not capped.
+      </p>
+    </Card>
+  );
+}
 
 const EMPTY_FORM = { email: "", name: "", role: "user" as "admin" | "user", timezone: "", currency: "" };
 
@@ -238,6 +303,8 @@ export function AdminClient({ initial, meId }: { initial: Payload; meId: string 
           Deactivating keeps every row the account owns and signs it out everywhere; it simply cannot log in again until it is reactivated. Deleting destroys the account and all of its data, permanently. Resetting a password is the only recovery path on this instance — there is no email here, so there is no reset link to send. Nothing on this page gives an administrator access to another account&apos;s data.
         </p>
       </Card>
+
+      <UsagePanel />
 
       <Modal open={open} onClose={() => setOpen(false)} title="New user">
         <form className="space-y-3" onSubmit={create}>

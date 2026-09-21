@@ -30,6 +30,7 @@ import {
   getUser, listUsers, resetUserPassword, revokeUserSessions, sessionCounts, setUserActive, setUserRole,
 } from "@/server/services/admin";
 import * as tasks from "@/server/services/tasks";
+import { activeUsers } from "@/server/services/maintenance";
 
 const hasDb = Boolean(process.env.TEST_DATABASE_URL || process.env.DATABASE_URL);
 const d = hasDb ? describe : describe.skip;
@@ -373,10 +374,14 @@ d("an instance can never be left with nobody able to administer it", () => {
 // Background work. The bug: the nightly run selected every account, deactivated or not.
 // ---------------------------------------------------------------------------------------------
 d("background jobs only run for accounts that can still sign in", () => {
-  it("the cron selects active accounts and says why", () => {
-    const src = readFileSync("src/app/api/cron/route.ts", "utf8");
-    const selection = src.match(/const all = await db\.select\(\)\.from\(users\)[^;]*/)?.[0] ?? "";
-    expect(selection).toContain("eq(users.isActive, true)");
+  it("the batch the scheduled jobs iterate excludes a deactivated account", async () => {
+    // Phase 3.19 moved this selection out of the route and into the maintenance registry, so this
+    // asserts the behaviour where it now lives rather than grepping for a line in a particular file.
+    const admin = await createTestUser(); await promote(admin.id);
+    const off = await createTestUser();
+    await setUserActive(await reread(admin.id), off.id, false);
+    expect((await activeUsers()).map((u) => u.id)).not.toContain(off.id);
+    await deleteTestUser(admin.id); await deleteTestUser(off.id);
   });
 
   it("a deactivated account is not in the set the cron would iterate", async () => {

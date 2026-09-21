@@ -3,7 +3,8 @@ import { createUser, signupSchema } from "@/server/services/users";
 import { createSession, requestMeta } from "@/server/auth/session";
 import { errorResponse, parseBody } from "@/server/http";
 import { isTrustedOrigin } from "@/server/security/origin";
-import { LIMITS, rateLimit } from "@/server/security/rate-limit";
+import { LIMITS } from "@/server/security/rate-limit";
+import { checkRateLimit } from "@/server/security/rate-limit-shared";
 import { audit } from "@/server/audit";
 import { bootstrapUserData } from "@/server/services/bootstrap";
 
@@ -13,7 +14,7 @@ export async function POST(req: Request) {
     // an account they did not choose is a real attack even before there is a session to steal.
     if (!isTrustedOrigin(req)) return NextResponse.json({ error: "Request blocked" }, { status: 403 });
     const meta = await requestMeta();
-    const rl = rateLimit(`signup:${meta.ip ?? "unknown"}`, LIMITS.signup.limit, LIMITS.signup.windowMs);
+    const rl = await checkRateLimit(`signup:${meta.ip ?? "unknown"}`, LIMITS.signup.limit, LIMITS.signup.windowMs);
     if (!rl.ok) return NextResponse.json({ error: "Too many attempts. Try again later." }, { status: 429 });
     const input = await parseBody(req, signupSchema);
     const user = await createUser(input);
