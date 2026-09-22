@@ -1,16 +1,97 @@
 name: Database backup
+
+# WHY THE DUMP IS ENCRYPTED BEFORE IT IS UPLOADED.
+#
+# This repository is public, and GitHub's own documentation is explicit: "Anyone with read access
+# to the repository can use the artifact download endpoint", and for a public repository that
+# endpoint works without authentication. Read access to a public repository is everybody. An
+# unencrypted pg_dump uploaded here would be a complete copy of the production database —
+# accounts, password hashes, session tokens, finances, journal entries, assistant memory —
+# downloadable by anyone for as long as it is retained.
+#
+# GitHub encrypts artifacts at rest, which protects them from GitHub's disks and from nobody else:
+# they are decrypted for whoever downloads them. So the dump is encrypted here, with a passphrase
+# only the repository owner holds, and the plaintext never leaves the step that made it.
+#
+# REQUIRED SECRETS
+#   DATABASE_URL       the production connection string
+#   BACKUP_PASSPHRASE  a long random passphrase, stored somewhere that is NOT this database —
+#                      a backup you cannot decrypt is not a backup
+#
+# RESTORE
+#   gpg --decrypt --output personal-os.dump personal-os-<stamp>.dump.gpg
+#   pg_restore --clean --if-exists --no-owner -d "$DATABASE_URL" personal-os.dump
+
 on:
   schedule:
     - cron: "0 3 * * *" # daily 03:00 UTC
-  workflow_dispatch:
+  workflow_dispatch: # so a backup can be taken on demand, before a migration for instance
+
+# Checkout needs to read the repository. Nothing here writes anything back.
+permissions:
+  contents: read
+
 jobs:
   backup:
     runs-on: ubuntu-latest
-    # Requires the DATABASE_URL secret (production database). Artifacts are kept 30 days (encrypted at rest by GitHub).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client
-      - run: ./scripts/backup.sh backups
-        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+
+      - name: Dump and verify
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::error::the DATABASE_URL secret is not configured - see the header of this workflow"
+            exit 1
+          fi
+          # The script refuses to produce a file it has not read back: see scripts/backup.sh.
+          ./scripts/backup.sh backups
+
+      - name: Encrypt
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BACKUP_PASSPHRASE:-}" ]; then
+            echo "::error::the BACKUP_PASSPHRASE secret is not configured - refusing to upload a plaintext database dump to a public repository"
+            exit 1
+          fi
+          shopt -s nullglob
+          found=0
+          for f in backups/*.dump; do
+            found=1
+            # The passphrase arrives on stdin, never as an argument: arguments are visible in the
+            # process list. gpg is preinstalled on the GitHub-hosted Ubuntu image.
+            printf '%s' "$BACKUP_PASSPHRASE" \
+              | gpg --batch --yes --quiet --symmetric --cipher-algo AES256 \
+                    --passphrase-fd 0 --output "$f.gpg" "$f"
+            # Prove the ciphertext decrypts to a readable archive before the plaintext is
+            # destroyed. pg_restore cannot read a custom-format archive from a pipe - it seeks -
+            # so the check decrypts to a temporary file and reads that.
+            check="$(mktemp)"
+            printf '%s' "$BACKUP_PASSPHRASE" \
+              | gpg --batch --yes --quiet --decrypt --passphrase-fd 0 --output "$check" "$f.gpg"
+            pg_restore --list "$check" >/dev/null
+            rm -f "$check"
+            rm -f "$f"
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no dump was produced"
+            exit 1
+          fi
+          # Names and sizes only; no content.
+          ls -lh backups/
+
       - uses: actions/upload-artifact@v4
-        with: { name: personal-os-backup, path: backups/, retention-days: 30 }
+        with:
+          name: personal-os-backup
+          # Only the encrypted file. Even if a plaintext dump somehow survived the step above,
+          # this pattern would not match it.
+          path: backups/*.gpg
+          retention-days: 30
+          if-no-files-found: error
