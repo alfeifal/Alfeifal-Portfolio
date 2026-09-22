@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/client";
+import { safeRedirect } from "@/lib/safe-redirect";
 import { MotionProvider, FadeIn } from "@/components/motion";
 import { Button } from "@/components/ui";
 import { Suspense } from "react";
@@ -18,7 +19,7 @@ function LoginForm() {
   useEffect(() => { api<{ needsSetup: boolean; signupAllowed: boolean }>("/api/auth/status").then((s) => { setStatus(s); if (s.needsSetup) router.replace("/setup"); }).catch(() => {}); }, [router]);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setError("");
-    try { await api("/api/auth/login", { method: "POST", json: { email, password } }); const next = sp.get("next"); router.replace(next && next.startsWith("/") ? next : "/"); router.refresh(); }
+    try { await api("/api/auth/login", { method: "POST", json: { email, password } }); router.replace(safeRedirect(sp.get("next"), window.location.origin)); router.refresh(); }
     catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
   return (
