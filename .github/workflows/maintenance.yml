@@ -28,6 +28,10 @@ concurrency:
   group: scheduled-maintenance
   cancel-in-progress: false
 
+# This job calls one URL. It reads nothing from the repository and writes nothing back, so the
+# GITHUB_TOKEN needs no scopes at all.
+permissions: {}
+
 jobs:
   frequent:
     runs-on: ubuntu-latest
@@ -44,9 +48,30 @@ jobs:
             echo "APP_URL variable or CRON_SECRET secret is not configured" >&2
             exit 1
           fi
-          # --fail-with-body so a non-2xx fails the run and the body is still shown.
-          # The secret goes in a header from the environment and is never echoed; curl's own output
-          # never includes request headers without -v, which is why -v is not used here.
-          curl --silent --show-error --fail-with-body --max-time 120 \
-               --header "Authorization: Bearer ${CRON_SECRET}" \
-               "${APP_URL}/api/cron?scope=frequent"
+
+          # The response body never reaches stdout. This repository is public, so its Actions logs
+          # are public, and the body identifies every active account by id. It goes to a file in the
+          # runner's temp directory, which is destroyed with the runner and is never uploaded.
+          body="$(mktemp)"
+          trap 'rm -f "$body"' EXIT
+
+          # --write-out prints the status code and nothing else; --output sends the body to the file.
+          # No -v and no set -x anywhere, so the Authorization header is never rendered.
+          code="$(curl --silent --show-error --max-time 120 \
+                       --output "$body" --write-out '%{http_code}' \
+                       --header "Authorization: Bearer ${CRON_SECRET}" \
+                       "${APP_URL}/api/cron?scope=frequent")"
+
+          echo "HTTP ${code}"
+          if [ "${code}" -lt 200 ] || [ "${code}" -ge 300 ]; then
+            echo "::error::maintenance endpoint returned HTTP ${code}"
+            exit 1
+          fi
+
+          # The one field from the body that is safe to print: a count, type-checked to be a number
+          # before it is echoed, so nothing else can be smuggled out through it.
+          failures="$(jq -r 'if (.failures | type) == "number" then .failures else "unknown" end' "$body" 2>/dev/null || echo unknown)"
+          echo "jobs failed: ${failures}"
+          if [ "${failures}" != "0" ]; then
+            echo "::warning::${failures} maintenance job(s) failed - see the deployment's own logs for detail"
+          fi

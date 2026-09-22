@@ -17,7 +17,7 @@
  * conversation after 24 h, so every total older than a day was already gone. The counter has to
  * survive the purge, and there is a test that purges and then looks.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -28,7 +28,7 @@ import * as schema from "@/server/db/schema";
 import { aiUsage, conversations, marketQuotes, messages, priceAlerts, rateLimits, users } from "@/server/db/schema";
 import { rateLimit } from "@/server/security/rate-limit";
 import { checkRateLimit, purgeRateLimits } from "@/server/security/rate-limit-shared";
-import { GLOBAL_JOBS, USER_JOBS, runMaintenance, activeUsers } from "@/server/services/maintenance";
+import { GLOBAL_JOBS, JOB_FAILED, USER_JOBS, runMaintenance, activeUsers } from "@/server/services/maintenance";
 import { checkAlerts } from "@/server/services/market";
 import { purgeExpiredConversations } from "@/server/services/conversations";
 import { processRecurring } from "@/server/services/finance";
@@ -523,5 +523,219 @@ d("the usage panel never becomes a window into an account", () => {
 
   it("the route is admin-guarded on the server", () => {
     expect(readFileSync("src/app/api/admin/usage/route.ts", "utf8")).toContain("withAdmin");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Checkpoint 3.19.1 — two leaks found in the audit of 273e1af.
+//
+// E-2: a failing job reported `failed: ${e.message}`. Drizzle puts the statement and its bound
+// parameters into that message, so a broken query wrote SQL — and the user ids bound to it — into
+// the response body.
+//
+// C-2: the workflow let curl print that body to stdout. This repository is public, so its Actions
+// logs are public.
+//
+// These tests break things for real: they drop the table a job needs and read what comes back, and
+// they execute the workflow's own shell against a stub server. Nothing here asserts that a string
+// appears in a source file.
+// ---------------------------------------------------------------------------------------------
+d("a failing maintenance job reports nothing about why", () => {
+  /** Runs `fn` with a table renamed out of the way, so the job that needs it throws for real. */
+  const withBrokenTable = async (table: string, fn: () => Promise<unknown>) => {
+    await db.execute(sql.raw(`alter table ${table} rename to ${table}_hidden`));
+    try {
+      return await fn();
+    } finally {
+      await db.execute(sql.raw(`alter table ${table}_hidden rename to ${table}`));
+    }
+  };
+
+  it("the real Drizzle error carries SQL and parameters — that is what is being contained", async () => {
+    // Establishes the premise rather than assuming it: if this ever stops being true the tests
+    // below would pass for the wrong reason.
+    const user = await createTestUser();
+    let message = "";
+    await withBrokenTable("price_alerts", async () => {
+      await checkAlerts(user.id).catch((e) => { message = e instanceof Error ? e.message : String(e); });
+    });
+    expect(message).toMatch(/price_alerts/);
+    expect(message.toLowerCase()).toMatch(/select|from/);
+    expect(message).toContain(user.id); // the bound parameter is the account's id
+    await deleteTestUser(user.id);
+  });
+
+  it("none of that reaches the report", async () => {
+    const user = await createTestUser();
+    const report = await withBrokenTable("price_alerts", () => runMaintenance(["frequent"])) as Record<string, unknown>;
+    const blob = JSON.stringify(report);
+
+    // No statement, no table name from the failing query, no bound parameter.
+    expect(blob).not.toMatch(/select|insert|update |delete from/i);
+    expect(blob).not.toContain("price_alerts");
+    expect(blob).not.toMatch(/params:/);
+    expect(blob).not.toMatch(/\$\d/);
+    await deleteTestUser(user.id);
+  });
+
+  it("no account id appears in any failure value", async () => {
+    const user = await createTestUser();
+    const report = await withBrokenTable("price_alerts", () => runMaintenance(["frequent"])) as Record<string, unknown>;
+    // Account ids are still the report's keys, by design — C-2 is what stops those being printed.
+    // What must never happen is an id leaking through an *error value*.
+    const values = JSON.stringify(Object.values(report));
+    expect(values).not.toContain(user.id);
+    expect(report[user.id]).toEqual({ alerts: JOB_FAILED });
+    await deleteTestUser(user.id);
+  });
+
+  it("the failure value is a bare constant, whatever the error was", async () => {
+    const report = await withBrokenTable("rate_limits", () => runMaintenance(["daily"])) as Record<string, unknown>;
+    expect(report.purgedRateLimits).toBe(JOB_FAILED);
+    expect(String(report.purgedRateLimits)).not.toContain(":");
+  });
+
+  it("the failure is still counted, not swallowed", async () => {
+    const clean = await runMaintenance(["daily"]) as Record<string, unknown>;
+    expect(clean.failures).toBe(0);
+
+    const broken = await withBrokenTable("rate_limits", () => runMaintenance(["daily"])) as Record<string, unknown>;
+    expect(broken.failures).toBe(1);
+  });
+
+  it("one broken job does not stop the others", async () => {
+    const report = await withBrokenTable("rate_limits", () => runMaintenance(["daily"])) as Record<string, unknown>;
+    expect(report.purgedRateLimits).toBe(JOB_FAILED);
+    expect(report.purgedSessions).toBe("ok"); // ran anyway
+    expect(report.newsForced).not.toBe(JOB_FAILED);
+  });
+
+  it("the internal log line carries no statement, parameter or id either", async () => {
+    const user = await createTestUser();
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "warn").mockImplementation((...a: unknown[]) => { lines.push(a.join(" ")); });
+    try {
+      await withBrokenTable("price_alerts", () => runMaintenance(["frequent"]));
+    } finally {
+      spy.mockRestore();
+    }
+    const logged = lines.join("\n");
+    expect(logged).toMatch(/job failed: alerts/);      // still diagnosable
+    expect(logged).not.toContain(user.id);             // but empty of payload
+    expect(logged).not.toMatch(/select|from "|params:/i);
+    expect(logged).not.toContain("price_alerts");
+    await deleteTestUser(user.id);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// C-2, tested by running the workflow's own shell rather than by reading it.
+// ---------------------------------------------------------------------------------------------
+describe("the workflow never prints the response body", () => {
+  /** The exact `run:` script from the workflow, dedented, so the test exercises what CI executes. */
+  const workflowScript = () => {
+    const yaml = readFileSync(".github/workflows/maintenance.yml", "utf8");
+    const m = yaml.match(/\n {8}run: \|\n([\s\S]*?)(?=\n\S|\n {0,7}\S|$)/);
+    if (!m) throw new Error("could not find the run: block in the workflow");
+    return m[1].split("\n").map((l) => (l.startsWith(" ".repeat(10)) ? l.slice(10) : l)).join("\n");
+  };
+
+  /** A stub standing in for the deployment, answering with whatever this test wants. */
+  const stub = async (status: number, body: unknown) => {
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => {
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    return { url: `http://127.0.0.1:${port}`, close: () => new Promise<void>((r) => { server.close(() => r()); }) };
+  };
+
+  const runScript = (script: string, env: Record<string, string>) =>
+    new Promise<{ code: number; out: string }>((resolve) => {
+      const { spawn } = require("node:child_process") as typeof import("node:child_process");
+      const p = spawn("bash", ["-c", script], { env: { ...process.env, ...env } });
+      let out = "";
+      p.stdout.on("data", (b: Buffer) => { out += b.toString(); });
+      p.stderr.on("data", (b: Buffer) => { out += b.toString(); });
+      p.on("close", (code: number | null) => resolve({ code: code ?? -1, out }));
+    });
+
+  const SECRET = "workflow-test-secret-not-real";
+  const UUID = "3f2a1c88-9d4e-4b7a-8c61-0ee5a7b91d42";
+
+  it("a successful run prints no part of the body", async () => {
+    const s = await stub(200, { scopes: ["frequent"], users: 1, [UUID]: { alerts: 0 }, failures: 0 });
+    try {
+      const { code, out } = await runScript(workflowScript(), { APP_URL: s.url, CRON_SECRET: SECRET });
+      expect(code).toBe(0);
+      expect(out).not.toContain(UUID);       // the account id never reaches the log
+      expect(out).not.toContain("alerts");
+      expect(out).not.toContain("scopes");
+      expect(out).toMatch(/HTTP 200/);       // but the outcome is still reported
+      expect(out).toMatch(/jobs failed: 0/);
+    } finally {
+      await s.close();
+    }
+  }, 60_000);
+
+  it("a body full of SQL and ids still never reaches the log", async () => {
+    const nasty = { scopes: ["daily"], [UUID]: { alerts: 'failed: select * from "price_alerts" where "user_id" = $1' }, failures: 1 };
+    const s = await stub(200, nasty);
+    try {
+      const { code, out } = await runScript(workflowScript(), { APP_URL: s.url, CRON_SECRET: SECRET });
+      expect(code).toBe(0);
+      expect(out).not.toContain(UUID);
+      expect(out).not.toContain("price_alerts");
+      expect(out).not.toMatch(/select/i);
+      expect(out).toMatch(/jobs failed: 1/);  // the count still surfaces
+    } finally {
+      await s.close();
+    }
+  }, 60_000);
+
+  it("a non-2xx fails the workflow", async () => {
+    for (const status of [401, 403, 500]) {
+      const s = await stub(status, { error: "Unauthorized" });
+      try {
+        const { code, out } = await runScript(workflowScript(), { APP_URL: s.url, CRON_SECRET: SECRET });
+        expect(code).not.toBe(0);
+        expect(out).toMatch(new RegExp(`HTTP ${status}`));
+      } finally {
+        await s.close();
+      }
+    }
+  }, 60_000);
+
+  it("a non-2xx body is not printed either", async () => {
+    const s = await stub(500, { error: `boom ${UUID} select * from users` });
+    try {
+      const { out } = await runScript(workflowScript(), { APP_URL: s.url, CRON_SECRET: SECRET });
+      expect(out).not.toContain(UUID);
+      expect(out).not.toMatch(/select \* from users/);
+    } finally {
+      await s.close();
+    }
+  }, 60_000);
+
+  it("the secret never appears in the output", async () => {
+    const s = await stub(200, { failures: 0 });
+    try {
+      const { out } = await runScript(workflowScript(), { APP_URL: s.url, CRON_SECRET: SECRET });
+      expect(out).not.toContain(SECRET);
+    } finally {
+      await s.close();
+    }
+  }, 60_000);
+
+  it("missing configuration fails without naming a value", async () => {
+    const { code, out } = await runScript(workflowScript(), { APP_URL: "", CRON_SECRET: "" });
+    expect(code).not.toBe(0);
+    expect(out).toMatch(/not configured/);
+  }, 60_000);
+
+  it("the GITHUB_TOKEN is given no scopes", () => {
+    expect(readFileSync(".github/workflows/maintenance.yml", "utf8")).toMatch(/^permissions: \{\}$/m);
   });
 });

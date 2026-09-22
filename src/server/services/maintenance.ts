@@ -82,33 +82,65 @@ export function activeUsers() {
 }
 
 /**
+ * The only thing a failed job ever reports outward.
+ *
+ * It used to be `failed: ${e.message}`, and that was a leak. Drizzle puts the statement *and its
+ * bound parameters* into the message — so a failing query wrote SQL, and real user data, into the
+ * response body, which a scheduler prints into its log. This value carries no payload at all.
+ */
+export const JOB_FAILED = "failed" as const;
+
+/**
+ * Records a job failure without carrying anything out of the exception.
+ *
+ * The class name is the one piece worth keeping: it distinguishes a database error from a
+ * programming mistake from a network timeout, and a class name has no room for a statement, a
+ * parameter, a token or somebody's data. The message, the stack and the cause are all dropped —
+ * including from the log line, because "internal" is not the same as "safe to write down".
+ */
+function noteFailure(job: string, e: unknown): typeof JOB_FAILED {
+  const kind = e instanceof Error ? e.constructor.name : typeof e;
+  console.warn(`[cron] job failed: ${job} (${kind})`);
+  return JOB_FAILED;
+}
+
+/**
  * Runs every job in the given scopes and reports what each one did.
  *
  * One job failing never stops the others, and never fails the run: a scheduler that sees a 500 has
  * no way to retry just the part that broke, and neither Vercel nor GitHub Actions retries at all.
  * The report says which job failed; the rest still happened.
  *
- * Failure text is the error's message only. It is written into the response body, which the
- * scheduler logs, so nothing from the environment may reach it.
+ * `failures` is the count of jobs that threw, so a caller can tell a clean run from a damaged one
+ * without reading — or printing — the rest of the report. The per-job entries still name which ones
+ * failed; this is the one number that is safe to surface anywhere.
  */
 export async function runMaintenance(scopes: readonly JobScope[]) {
   const wanted = new Set(scopes);
-  const failed = (e: unknown) => `failed: ${e instanceof Error ? e.message : "unknown error"}`;
+  let failures = 0;
+  const attempt = async (name: string, fn: () => Promise<unknown>) => {
+    try {
+      return await fn();
+    } catch (e) {
+      failures++;
+      return noteFailure(name, e);
+    }
+  };
 
   const report: Record<string, unknown> = { scopes: [...wanted] };
   for (const job of GLOBAL_JOBS) {
-    if (wanted.has(job.scope)) report[job.name] = await job.run().catch(failed);
+    if (wanted.has(job.scope)) report[job.name] = await attempt(job.name, () => job.run());
   }
 
   const jobs = USER_JOBS.filter((j) => wanted.has(j.scope));
-  if (!jobs.length) return { ...report, users: 0 };
+  if (!jobs.length) return { ...report, users: 0, failures };
 
   const all = await activeUsers();
   report.users = all.length;
   for (const u of all) {
     const perUser: Record<string, unknown> = {};
-    for (const job of jobs) perUser[job.name] = await job.run(u).catch(failed);
+    for (const job of jobs) perUser[job.name] = await attempt(job.name, () => job.run(u));
     report[u.id] = perUser;
   }
-  return report;
+  return { ...report, failures };
 }
