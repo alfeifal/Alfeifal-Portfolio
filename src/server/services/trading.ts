@@ -219,10 +219,16 @@ export async function addWatchlistItem(userId: string, input: z.infer<typeof wat
     const [w] = await db.select().from(watchlists).where(eq(watchlists.userId, userId)).orderBy(desc(watchlists.isDefault)).limit(1);
     watchlistId = w ? w.id : (await db.insert(watchlists).values({ userId, name: "Watchlist", isDefault: true }).returning())[0].id;
   }
-  const [dup] = await db.select().from(watchlistItems).where(and(eq(watchlistItems.watchlistId, watchlistId), eq(watchlistItems.userId, userId), eq(watchlistItems.symbol, input.symbol)));
+  const onList = and(eq(watchlistItems.watchlistId, watchlistId), eq(watchlistItems.userId, userId), eq(watchlistItems.symbol, input.symbol));
+  const [dup] = await db.select().from(watchlistItems).where(onList);
   if (dup) return dup;
-  const [i] = await db.insert(watchlistItems).values({ ...input, watchlistId, userId }).returning();
-  return i;
+  const [i] = await db.insert(watchlistItems).values({ ...input, watchlistId, userId }).onConflictDoNothing().returning();
+  if (i) return i;
+  // watchlist_items_symbol_uniq: a concurrent add got the symbol onto the list first. Adding the
+  // same symbol twice is a no-op either way, so hand back the row that exists.
+  const [raced] = await db.select().from(watchlistItems).where(onList);
+  if (raced) return raced;
+  throw notFound("Watchlist item");
 }
 export async function updateWatchlistItem(userId: string, id: string, input: { notes?: string | null; name?: string | null; position?: number }) {
   const [i] = await db.update(watchlistItems).set(input).where(and(eq(watchlistItems.id, id), eq(watchlistItems.userId, userId))).returning();

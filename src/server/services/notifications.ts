@@ -60,8 +60,12 @@ export async function notify(userId: string, n: { kind: typeof notifications.$in
     const [dup] = await db.select({ id: notifications.id }).from(notifications).where(and(eq(notifications.userId, userId), eq(notifications.dedupeKey, n.dedupeKey))).limit(1);
     if (dup) return null;
   }
-  const [row] = await db.insert(notifications).values({ userId, ...n }).returning();
-  return row;
+  // The lookup above only catches the sequential case. Both schedulers that call the maintenance
+  // endpoint document duplicate delivery, so two runs can reach this insert having each seen an
+  // empty table; notifications_dedupe_uniq is what actually decides, and the loser gets no row.
+  // Rows without a dedupe key never conflict (nulls are distinct), so they still always insert.
+  const [row] = await db.insert(notifications).values({ userId, ...n }).onConflictDoNothing().returning();
+  return row ?? null;
 }
 
 /**

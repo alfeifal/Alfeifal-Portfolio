@@ -1,6 +1,6 @@
 # Production safety
 
-Last verified: 2026-09-22, against commit `ad17110`.
+Last verified: 2026-09-23, against commit `0784150` plus the phase 3.21 changes.
 
 Nothing in this file is written from a previous report. Every line was checked in the session that
 wrote it, and anything that could not be checked says so.
@@ -20,7 +20,7 @@ to Vercel's environment variables, which this working environment does not have.
 
 ## Migration state
 
-Read over HTTPS with read-only statements on 2026-09-22:
+Read over HTTPS with read-only statements on 2026-09-22, re-checked 2026-09-23:
 
 | | |
 |---|---|
@@ -29,6 +29,7 @@ Read over HTTPS with read-only statements on 2026-09-22:
 | `rate_limits` present | no |
 | Public tables | 55 (the count from before `0007`; the migration adds two) |
 | Accounts | 1 |
+| Server version | PostgreSQL 18.6 (re-read 2026-09-23) |
 
 **Migration `0007_shared_limits_and_ai_usage` is NOT applied to production.**
 
@@ -48,6 +49,32 @@ The application code that uses those tables **is deployed** (`GET /api/cron` ans
 | AI usage counter | Records nothing; the write fails and is swallowed. |
 | `/api/admin/usage` | **500** — the one surface that does not degrade gracefully. |
 | Everything else in the cron | Unaffected; verified against a database in this exact state. |
+
+### Migration `0008_concurrency_unique_constraints` is also NOT applied
+
+Added in phase 3.21 for BUG-007. Four statements: three `CREATE UNIQUE INDEX`, one `ALTER TABLE …
+ADD CONSTRAINT … UNIQUE NULLS NOT DISTINCT`, and one `DROP INDEX` of the plain
+`notifications_dedupe_idx` that the new unique index replaces. The unique index is created before
+the plain one is dropped, so the dedupe lookup is never unindexed. No table, column or row is
+touched.
+
+`NULLS NOT DISTINCT` needs PostgreSQL 15 or later; production is 18.6, confirmed by reading
+`current_setting('server_version')` on 2026-09-23.
+
+A unique index fails if the table already violates it, so this was checked before writing the
+migration. Read-only against production, 2026-09-23 — **zero** rows violate any of the four:
+
+| Constraint | Existing violations |
+|---|---|
+| `notifications (user_id, dedupe_key)` | 0 |
+| `categories (user_id, kind, lower(name))` | 0 |
+| `budgets (user_id, category_id)` nulls-not-distinct | 0 |
+| `watchlist_items (watchlist_id, symbol)` | 0 |
+
+**Consequence of it being absent:** none that is visible. The four call sites were written so the
+`ON CONFLICT DO NOTHING` clause is inert without the indexes, which is exactly today's behaviour —
+the duplicate writes of BUG-007 remain possible in production until it is applied. Applying it
+changes no data.
 
 ## Backup state
 
@@ -101,6 +128,7 @@ here, because that needs the Neon console or API.
 |---|---|
 | No backup | The two secrets above, set by the repository owner |
 | `0007` not applied | A verified backup, then explicit authorization |
+| `0008` not applied | The same; it applies after `0007` and BUG-007 stays live until it does |
 | `/api/admin/usage` returns 500 | `0007` |
 | Rate limiting is per-instance in production | `0007` |
 | GitHub Actions maintenance workflow failing | `APP_URL` variable and `CRON_SECRET` secret |

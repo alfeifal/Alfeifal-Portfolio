@@ -1,4 +1,5 @@
-import { boolean, date, index, integer, numeric, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, index, integer, numeric, pgEnum, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { dataSourceEnum, id, timestamps, userRef } from "./_shared";
 
 export const accountTypeEnum = pgEnum("account_type", ["checking", "savings", "cash", "credit", "investment", "other"]);
@@ -36,7 +37,13 @@ export const categories = pgTable(
     archived: boolean("archived").notNull().default(false),
     ...timestamps,
   },
-  (t) => [index("categories_user_idx").on(t.userId, t.kind)],
+  (t) => [
+    index("categories_user_idx").on(t.userId, t.kind),
+    // `resolveCategory()` looks a category up by lower(name) and creates it when missing, so two
+    // concurrent AI entries used to produce two "Groceries" rows and silently split the user's
+    // spending between them. The index both enforces the invariant and serves that lookup.
+    uniqueIndex("categories_user_kind_name_uniq").on(t.userId, t.kind, sql`lower(${t.name})`),
+  ],
 );
 
 export const transactions = pgTable(
@@ -96,7 +103,12 @@ export const budgets = pgTable(
     period: text("period").notNull().default("monthly"), // monthly | weekly
     ...timestamps,
   },
-  (t) => [index("budgets_user_idx").on(t.userId)],
+  (t) => [
+    index("budgets_user_idx").on(t.userId),
+    // One budget per category, and — thanks to NULLS NOT DISTINCT — a single total budget too,
+    // which is the row `upsertBudget()` was duplicating under concurrent calls.
+    unique("budgets_user_category_uniq").on(t.userId, t.categoryId).nullsNotDistinct(),
+  ],
 );
 
 export const savingsGoals = pgTable(

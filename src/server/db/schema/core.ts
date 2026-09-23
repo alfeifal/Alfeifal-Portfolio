@@ -89,7 +89,13 @@ export const notifications = pgTable(
     scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("notifications_user_idx").on(t.userId, t.createdAt), index("notifications_dedupe_idx").on(t.userId, t.dedupeKey)],
+  (t) => [
+    index("notifications_user_idx").on(t.userId, t.createdAt),
+    // Unique, not just indexed: `notify()` checks for a duplicate before inserting, but two
+    // overlapping cron runs reach the insert together and both see nothing. Rows with a null
+    // dedupe_key are exempt (nulls are distinct), which is what ad-hoc notifications need.
+    uniqueIndex("notifications_dedupe_uniq").on(t.userId, t.dedupeKey),
+  ],
 );
 
 // ---------------- AI ----------------

@@ -1,4 +1,4 @@
-import { boolean, date, index, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, index, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { dataSourceEnum, id, timestamps, userRef } from "./_shared";
 
 /** REAL vs SIMULATED are never mixed (spec §13). Every trade belongs to an account with a fixed mode. */
@@ -104,7 +104,12 @@ export const watchlistItems = pgTable(
     position: integer("position").notNull().default(0),
     ...timestamps,
   },
-  (t) => [index("watchlist_items_wl_idx").on(t.watchlistId)],
+  (t) => [
+    index("watchlist_items_wl_idx").on(t.watchlistId),
+    // addWatchlistItem() returns the existing row for a symbol already on the list; the index is
+    // what makes that true when two callers add the same symbol at once.
+    uniqueIndex("watchlist_items_symbol_uniq").on(t.watchlistId, t.symbol),
+  ],
 );
 
 export const priceAlerts = pgTable(

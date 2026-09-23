@@ -1,8 +1,9 @@
-import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/server/db";
 import { accounts, budgets, categories, recurringTransactions, savingsGoals, transactions } from "@/server/db/schema";
 import { badRequest, notFound } from "@/server/http";
+import { isUniqueViolation } from "@/server/db/errors";
 import { dateSchema } from "./tasks";
 import { round2 } from "@/lib/money";
 import { addDaysKey, todayKey } from "@/lib/dates";
@@ -100,20 +101,40 @@ async function defaultAccountId(userId: string) {
 export async function listCategories(userId: string) {
   return db.select().from(categories).where(and(eq(categories.userId, userId), eq(categories.archived, false))).orderBy(asc(categories.kind), asc(categories.name));
 }
+/** A category name identifies the category, so it is stored and matched already trimmed. */
+const categoryName = (name: string) => name.trim();
+const duplicateCategory = (name: string) => badRequest(`You already have a category called "${name}"`);
+
 export async function createCategory(userId: string, input: z.infer<typeof categorySchema>) {
-  const [c] = await db.insert(categories).values({ ...input, userId }).returning();
+  const name = categoryName(input.name);
+  const [c] = await db.insert(categories).values({ ...input, name, userId }).onConflictDoNothing().returning();
+  // categories_user_kind_name_uniq. Without the clean error this surfaces as a raw driver failure.
+  if (!c) throw duplicateCategory(name);
   return c;
 }
 export async function updateCategory(userId: string, id: string, input: Partial<z.infer<typeof categorySchema>> & { archived?: boolean }) {
-  const [c] = await db.update(categories).set(input).where(and(eq(categories.id, id), eq(categories.userId, userId))).returning();
+  const patch = input.name === undefined ? input : { ...input, name: categoryName(input.name) };
+  const [c] = await db.update(categories).set(patch).where(and(eq(categories.id, id), eq(categories.userId, userId))).returning()
+    .catch((e) => { throw isUniqueViolation(e) && patch.name ? duplicateCategory(patch.name) : e; });
   if (!c) throw notFound("Category");
   return c;
 }
 /** Resolve a category by (case-insensitive) name; creates it when missing so AI entries never fail silently. */
 export async function resolveCategory(userId: string, name: string, kind: "expense" | "income") {
-  const [hit] = await db.select().from(categories).where(and(eq(categories.userId, userId), eq(categories.kind, kind), sql`lower(${categories.name}) = lower(${name})`)).limit(1);
+  const wanted = categoryName(name);
+  const find = async () => {
+    const [hit] = await db.select().from(categories)
+      .where(and(eq(categories.userId, userId), eq(categories.kind, kind), sql`lower(${categories.name}) = lower(${wanted})`)).limit(1);
+    return hit;
+  };
+  const hit = await find();
   if (hit) return hit;
-  return createCategory(userId, { name: name.trim(), kind });
+  const [created] = await db.insert(categories).values({ name: wanted, kind, userId }).onConflictDoNothing().returning();
+  if (created) return created;
+  // A concurrent caller created it between the lookup and the insert; theirs is the row that won.
+  const raced = await find();
+  if (raced) return raced;
+  throw badRequest(`Could not resolve the category "${wanted}"`);
 }
 
 // ---------- Transactions ----------
@@ -235,12 +256,18 @@ export async function listBudgets(userId: string) {
 }
 export async function upsertBudget(userId: string, input: z.infer<typeof budgetSchema>) {
   await assertOwned(userId, { category: input.categoryId });
-  const existing = await db.select().from(budgets).where(and(eq(budgets.userId, userId), input.categoryId ? eq(budgets.categoryId, input.categoryId) : sql`${budgets.categoryId} is null`)).limit(1);
+  const mine = and(eq(budgets.userId, userId), input.categoryId ? eq(budgets.categoryId, input.categoryId) : isNull(budgets.categoryId));
+  const set = { amount: input.amount, period: input.period };
+  const existing = await db.select({ id: budgets.id }).from(budgets).where(mine).limit(1);
   if (existing[0]) {
-    const [b] = await db.update(budgets).set({ amount: input.amount, period: input.period }).where(eq(budgets.id, existing[0].id)).returning();
+    const [b] = await db.update(budgets).set(set).where(eq(budgets.id, existing[0].id)).returning();
     return b;
   }
-  const [b] = await db.insert(budgets).values({ ...input, userId }).returning();
+  const [inserted] = await db.insert(budgets).values({ ...input, userId }).onConflictDoNothing().returning();
+  if (inserted) return inserted;
+  // budgets_user_category_uniq rejected the insert, so a concurrent call created this user's budget
+  // for the same category first. An upsert must still apply the amount it was given.
+  const [b] = await db.update(budgets).set(set).where(mine).returning();
   return b;
 }
 export async function deleteBudget(userId: string, id: string) {

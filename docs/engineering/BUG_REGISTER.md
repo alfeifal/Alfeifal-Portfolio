@@ -110,6 +110,77 @@ after SEC-003 is resolved.
 
 ---
 
+## BUG-007 — four check-then-insert writes duplicate under concurrency
+
+**Severity:** HIGH · **Status:** fixed in code (commit for phase 3.21), **dormant until 0008 is
+applied** — see PRODUCTION_SAFETY.md
+
+**Reproduced** by `tests/concurrency.test.ts`: eight overlapping calls to each entry point against a
+real Postgres, with the connection pool warmed first so the calls genuinely overlap. Against the
+unfixed code, 6 of the 7 concurrency assertions failed, repeatably across three runs:
+
+| Entry point | Guard it relied on | Rows after 8 concurrent calls |
+|---|---|---|
+| `notify()` (same `dedupeKey`) | select, then insert | 7 |
+| `resolveCategory()` (same name) | select `lower(name)`, then insert | 7 |
+| `resolveCategory()` (mixed case) | same | 3 |
+| `upsertBudget()` (total budget, null category) | select, then insert | 8 |
+| `upsertBudget()` (per category) | select, then insert | 8 |
+| `addWatchlistItem()` (same symbol) | select, then insert | 8 |
+
+None of the four writes was atomic, and `notifications_dedupe_idx` was a **plain** index, not a
+unique one, so nothing at the database level rejected the second row.
+
+**This corrects a claim made in phase 3.19.** That phase recorded that "every job is idempotent".
+That had only ever been checked by calling each job twice *in sequence*. It does not hold under the
+duplicate delivery both schedulers explicitly document (Vercel cron is best-effort and may deliver a
+schedule more than once; GitHub Actions can start the next run while a slow one is still going), nor
+under two ordinary requests arriving together.
+
+**Fix.** Migration `0008_concurrency_unique_constraints` adds the constraint that decides each case:
+
+- `notifications_dedupe_uniq` — unique on `(user_id, dedupe_key)`, replacing the plain index. Rows
+  without a dedupe key are exempt, because nulls are distinct.
+- `categories_user_kind_name_uniq` — unique on `(user_id, kind, lower(name))`.
+- `budgets_user_category_uniq` — unique on `(user_id, category_id)` `NULLS NOT DISTINCT`, so the
+  single total budget (null category) is covered too. Production runs PostgreSQL 18.6; the clause
+  needs 15+.
+- `watchlist_items_symbol_uniq` — unique on `(watchlist_id, symbol)`.
+
+Each call site keeps its existing lookup and adds `ON CONFLICT DO NOTHING` plus a re-read of the
+winning row. That shape was chosen deliberately: with no unique index present the clause never
+fires, so **behaviour is unchanged until 0008 is applied, and atomic afterwards**. This matters
+because 0008 sits behind the same production blocker as 0007.
+
+**Also changed, because the constraint makes it reachable:** `createCategory()` and
+`updateCategory()` now answer a duplicate name with a 400 carrying a readable message instead of
+letting the driver error surface as a 500. `src/server/db/errors.ts` classifies SQLSTATE 23505,
+walking the `cause` chain because Drizzle wraps driver failures in `DrizzleQueryError`.
+
+**Verified:** 11/11 pass after the migration, three consecutive runs; 6 of them fail before it.
+Full suite 878 passed / 37 files.
+
+**Pre-flight against production (read-only, 2026-09-23):** zero existing rows violate any of the
+four constraints, so the migration cannot fail on existing data.
+
+---
+
+## BUG-008 — two concurrent callers can create two default watchlists
+
+**Severity:** LOW · **Status:** open, recorded not fixed
+
+`addWatchlistItem()` creates a default watchlist when the user has none, with the same
+check-then-insert shape as BUG-007. It is left unfixed because `bootstrapUserData()` creates a
+default watchlist for every account, so the branch is only reachable after a user deletes all of
+their watchlists and then adds two symbols simultaneously. The consequence is a duplicate list, not
+lost or misattributed data.
+
+Fixing it needs a partial unique index on `(user_id) WHERE is_default`, which would also constrain
+the existing "set another list as default" path — more product surface than the defect justifies.
+Revisit if watchlist management grows.
+
+---
+
 ## Conventions
 
 - A bug is only recorded once reproduced.

@@ -1,6 +1,6 @@
 # Architecture status
 
-Written from the repository at `ad17110` + the 3.20 changes, not from prior reports.
+Written from the repository at `0784150` + the 3.21 changes, not from prior reports.
 `docs/ARCHITECTURE.md` remains the design document; this file records what is actually true now,
 including the parts that are true and unwelcome.
 
@@ -72,7 +72,12 @@ One registry, `services/maintenance.ts`, each job declaring the cadence it needs
 - **daily** — recurring transactions, notifications, portfolio snapshot, session purge, rate-limit
   purge. These reconcile, so a missed run costs lateness.
 
-Every job is idempotent, because both schedulers warn that runs are dropped *and* duplicated.
+Both schedulers warn that runs are dropped *and* duplicated, so every job has to be idempotent.
+An earlier version of this file stated flatly that they all were. That was wrong: it had only been
+checked by running each job twice in sequence. Phase 3.21 ran them concurrently and four writes
+produced duplicate rows (BUG-007). Idempotence now rests on unique constraints in migration `0008`
+rather than on a lookup the second caller has not yet seen — **and `0008` is not applied to
+production**, so in the deployment today those four writes are still not idempotent under overlap.
 
 Two schedulers: Vercel Cron daily (runs everything — Hobby caps at once a day) and GitHub Actions
 every 15 minutes for the frequent half. The daily pass is the full set on purpose, so nothing
@@ -89,12 +94,32 @@ depends on the workflow existing.
 | GitHub Actions | maintenance, backup | currently failing: secrets unset |
 | Vercel Cron | daily maintenance | unconfirmed: `CRON_SECRET` not visible from here |
 
+## Data integrity
+
+Audited in phase 3.21 by reading every column definition and every arithmetic path, not by sampling.
+
+**Money and quantities are exact.** No monetary value is stored as a float anywhere. Every column is
+`numeric` with an explicit precision and scale: `numeric(14,2)` for amounts, `numeric(18,6)` for
+prices, `numeric(18,8)` for quantities. Totals are summed in SQL, where `sum()` over `numeric` is
+exact; the one place JavaScript adds money (`financeBalance` in `services/finance.ts`) reduces over
+values that are already exact to two decimals and rounds through `round2()`.
+
+**Index coverage has a known gap, deliberately not closed here.** Six tables carry `user_id` with no
+index leading on it: `german_progress`, `nutrition_entries`, `milestones`, `watchlist_items`,
+`training_days`, `training_day_exercises`. Every query against them filters by user, so the shape is
+wrong in principle — but with one account and small tables there is no measurement showing it costs
+anything, and this project does not add indexes on principle alone. It belongs to the performance
+phase, with a concrete trigger: measure `EXPLAIN (ANALYZE)` on the per-user list query for each of
+the six at realistic row counts, and add the index where a sequential scan actually dominates.
+
 ## Known architecture debt
 
 1. **The CSRF rule is implemented twice** (`proxy.ts` inline, `security/origin.ts` exported). Kept
    as defence in depth, but they can diverge. No test currently pins them to the same behaviour.
 2. **Production runs a schema older than its code.** `0007` is unapplied, so the shared rate limiter
-   is silently in fallback and `/api/admin/usage` returns 500.
+   is silently in fallback and `/api/admin/usage` returns 500. `0008` is unapplied too, so the four
+   concurrent-write duplicates of BUG-007 remain live in production; the fix is deployed but inert
+   without its constraints, by design.
 3. **`notFound()` answers 200** app-wide (BUG-005).
 4. **Native tool search is unvalidated** and off; the flag path exists but has never met a provider.
 5. **No per-account AI spend ceiling.** Usage is measured, not capped — deliberately, because until
