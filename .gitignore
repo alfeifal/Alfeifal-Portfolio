@@ -11,3 +11,7 @@ coverage/
 tsconfig.tsbuildinfo
 backups/
 next-env.d.ts
+
+# Written by `next dev` for AI agents (next.config.ts: agentRules). Build output, not source.
+AGENTS.md
+CLAUDE.md
