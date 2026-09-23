@@ -12,6 +12,8 @@ the fix.
 | SEC-003 | MEDIUM | Operations | Open, owner action |
 | SEC-004 | LOW | Logging | Fixed as a side effect of SEC-002 |
 | SEC-005 | INFORMATIONAL | Rate limiting | Accepted, documented |
+| SEC-006 | MEDIUM | API error handling | Fixed, verified — SEC-002 was incomplete |
+| SEC-007 | MEDIUM | AI assistant | Mitigated, not eliminated — see the caveat |
 
 ---
 
@@ -165,6 +167,95 @@ an outage.
 
 ---
 
+## SEC-006 — the SEC-002 fix covered only the routes the CRUD factory generates
+
+**Severity:** MEDIUM · **Status:** fixed in phase 3.22, verified against a production build
+
+**Area:** `src/server/http.ts`, `src/server/crud.ts`, every hand-written `[id]` route
+
+SEC-002 put `assertResourceId` in `src/server/crud.ts`, so it applied to routes the factory
+generates and to nothing else. Eleven hand-written routes pass `params.id` straight to a service.
+Probed against a production build with a logged-in session, **eight of them answered 500**:
+
+| Route | Before | After |
+|---|---|---|
+| `GET`/`DELETE /api/ai/conversations/[id]` | 500 | 404 |
+| `POST /api/ai/actions/[id]/confirm` | 500 | 404 |
+| `POST /api/ai/actions/[id]/reject` | 500 | 404 |
+| `GET`/`PATCH`/`DELETE /api/academy/lessons/[id]` | 500 | 404 |
+| `POST /api/goals/[id]/milestones` | 500 | 404 |
+| `GET /api/admin/users/[id]` | 500 | 404 |
+| `PATCH`/`DELETE /api/ai/memory/[id]` | 400 (the service validated it) | 404 |
+
+The response body was already masked to `{"error":"Internal error"}` under `NODE_ENV=production`,
+so nothing internal reached the caller — but the status was wrong, any caller could mint 500s at
+will, and the server log carried `invalid input syntax for type uuid` with the bound parameter.
+
+**Fix.** The guard moved into `withAuth`, where it runs for every route before the handler. There
+are only two dynamic segment names in `src/app/api` — `id` (41 routes) and `kind` (1) — so this is
+complete rather than a longer list of call sites. `crud()` passes the resource name through
+`{ resource }` so its 404 still says "Transaction not found" rather than "Resource not found".
+
+**A second defect this exposed, found by the same probe.** The first version of the guard read
+`(await ctx.params).id` assuming `ctx.params` exists whenever `ctx` does. Next passes a context
+object to *every* handler and only populates `params` on a dynamic route, so every collection
+endpoint — `/api/me`, `/api/tasks`, `/api/finance/categories`, all of them — answered 500 for
+about ten minutes of this session. Caught by probing, not by the type system: `params` is typed `P`
+and is `undefined` at runtime. Fixed with `?? ({} as P)` and re-verified.
+
+**Verified after the fix:** all 11 malformed-id probes answer 404; all 7 collection probes answer
+200. `tests/ai-audit.test.ts` pins the guard's location, and fails when `http.ts` is reverted.
+
+**Note, not a defect:** on an admin route a non-admin now gets 404 for a malformed id rather than
+403, because the id guard runs inside `withAuth` and `withAdmin` wraps it. Nothing is disclosed —
+a well-formed id still gets 403 — and the earlier answer is the less informative of the two.
+
+---
+
+## SEC-007 — third-party news text reaches a tool-enabled loop
+
+**Severity:** MEDIUM · **Status:** mitigated in phase 3.22. **Not eliminated, and this entry will
+not claim otherwise.**
+
+**Area:** `src/server/ai/tools/market.ts`, `src/server/ai/context.ts`, `src/server/ai/untrusted.ts`
+
+`get_market_news` is a read tool available in assistant mode — `toolsForMode("assistant")` returns
+`null`, meaning every registered tool — and it returns `headline` and `summary` copied verbatim
+from public RSS feeds (CNBC, MarketWatch, Investing.com, CoinDesk and others). That text lands in
+the same transcript from which the model chooses its next tool call.
+
+What an instruction hidden in a feed item could reach:
+
+| Class | Requires confirmation? | Reachable |
+|---|---|---|
+| `read` | n/a | yes |
+| `low` (`add_expense`, `create_task`, `remember_memory`, `delete_notification`, …) | **no — runs immediately** | yes |
+| `medium` deletes | yes, `needsConfirmation` is set on all of them | no |
+| `high` | yes, always, regardless of the tool's own opinion | no |
+
+The worst of the low-risk set is `remember_memory`: a memory is durable and `buildSystemPrompt`
+replays it into every later conversation, so one poisoned write persists.
+
+**Mitigation.** `get_market_news` now returns `{ untrustedContent, items }` instead of a bare
+array, and the system prompt gains a rule naming that label and saying what to do with it. Nothing
+in the feed content is altered or dropped — it is wrapped, not filtered.
+
+**The caveat, stated plainly.** This is an instruction to a language model. No test in this
+repository can show that a model obeys it, because no test here has ever reached a real provider
+(there is no `ANTHROPIC_API_KEY` in this environment). `tests/ai-audit.test.ts` proves the label is
+present, that wrapping preserves the content unchanged, and that the prompt carries the rule — that
+is all it proves.
+
+**The controls that do not depend on the model's cooperation**, and which carry the actual risk
+reduction: high-risk tools always confirm, every medium-risk delete confirms, and every action the
+assistant takes is written to `ai_action_logs` where the user can see it.
+
+**Not changed on purpose:** no risk level was raised and no confirmation was added or removed.
+Raising `remember_memory` to medium would close the durable path, but changing risk levels is
+outside what this phase was authorized to do. Recorded here as the open decision it is.
+
+---
+
 ## Checked and found sound
 
 Re-tested against a production build during 3.20; no defect found:
@@ -180,6 +271,8 @@ Re-tested against a production build during 3.20; no defect found:
 - A forged session cookie does not authenticate.
 - CSRF: every mutating request without a matching `Origin` is refused, including from another
   origin, on ordinary routes, account deletion and admin routes.
-- Malformed, traversal and injection-shaped ids return a client error with no internal detail.
+- Malformed, traversal and injection-shaped ids return a client error with no internal detail **on
+  the routes the CRUD factory generates**. This line originally had no qualifier and was wrong for
+  the hand-written routes; see SEC-006, which found and fixed them.
 - An invalid JSON body returns 400 without exposing the parser.
 - `/api/me` exposes no password material, tokens, environment values or another account's address.

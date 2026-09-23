@@ -18,7 +18,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { safeRedirect } from "@/lib/safe-redirect";
-import { assertResourceId } from "@/server/crud";
+import { assertResourceId } from "@/server/http";
 import { AppError } from "@/server/http";
 
 const ORIGIN = "https://personal-os.example";

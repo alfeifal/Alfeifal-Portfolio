@@ -739,3 +739,80 @@ describe("the workflow never prints the response body", () => {
     expect(readFileSync(".github/workflows/maintenance.yml", "utf8")).toMatch(/^permissions: \{\}$/m);
   });
 });
+
+/**
+ * The guard in `src/server/db/index.ts`, exercised the way the mistake actually happened.
+ *
+ * A throwaway script that assigns `process.env.NODE_ENV` and `DATABASE_URL` at the top of the file
+ * does not redirect a statically imported `@/server/db`: ESM evaluates the imports first, so the
+ * module reads `.env` — production — before the assignment runs. A script written that way looked
+ * local, reported success, and created an account in the live database during this project.
+ *
+ * These run in child processes because the guard fires at module evaluation, once per process.
+ */
+describe("the database module refuses a remote host from a process that is not the deployment", () => {
+  const child = (env: Record<string, string>) => {
+    const script = `/tmp/dbguard-${uniq()}.mjs`;
+    writeFileSync(script, `
+      try {
+        await import("${process.cwd()}/src/server/db/index.ts");
+        console.log(JSON.stringify({ connected: true }));
+      } catch (e) {
+        console.log(JSON.stringify({ connected: false, message: String(e.message ?? e) }));
+      }
+      process.exit(0);
+    `);
+    // A deliberately fake host: the guard must refuse before anything opens a socket. Both variables
+    // carry it, because which one is read depends on NODE_ENV.
+    const remote = "postgresql://u:p@db.invalid.example:5432/x";
+    return execFileAsync("npx", ["tsx", script], {
+      cwd: process.cwd(),
+      env: { ...process.env, DATABASE_URL: remote, TEST_DATABASE_URL: remote, ...env },
+      timeout: 60_000,
+    }).then((r) => JSON.parse(r.stdout.trim().split("\n").pop()!) as { connected: boolean; message?: string });
+  };
+
+  it("refuses when NODE_ENV is not production", async () => {
+    const r = await child({ NODE_ENV: "" });
+    expect(r.connected).toBe(false);
+    expect(r.message).toMatch(/Refusing to connect/);
+    expect(r.message).toMatch(/db\.invalid\.example/);
+  }, 60_000);
+
+  it("refuses under NODE_ENV=test too — that is the shape that caused the incident", async () => {
+    const r = await child({ NODE_ENV: "test" });
+    expect(r.connected).toBe(false);
+    expect(r.message).toMatch(/Refusing to connect/);
+  }, 60_000);
+
+  it("names the host and nothing else — never the URL or its credentials", async () => {
+    const r = await child({ NODE_ENV: "test" });
+    expect(r.message).not.toContain("postgresql://");
+    expect(r.message).not.toContain("u:p");
+  }, 60_000);
+
+  it("allows the deployment itself", async () => {
+    const r = await child({ NODE_ENV: "production" });
+    expect(r.connected).toBe(true);
+  }, 60_000);
+
+  it("allows a remote host when it is asked for explicitly", async () => {
+    const r = await child({ NODE_ENV: "test", ALLOW_REMOTE_DB: "1" });
+    expect(r.connected).toBe(true);
+  }, 60_000);
+
+  it("allows a local database without any ceremony", async () => {
+    const script = `/tmp/dbguard-${uniq()}.mjs`;
+    writeFileSync(script, `
+      await import("${process.cwd()}/src/server/db/index.ts");
+      console.log(JSON.stringify({ connected: true }));
+      process.exit(0);
+    `);
+    const r = await execFileAsync("npx", ["tsx", script], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_ENV: "test", DATABASE_DRIVER: "pg", DATABASE_SSL: "false" },
+      timeout: 60_000,
+    });
+    expect(JSON.parse(r.stdout.trim().split("\n").pop()!)).toEqual({ connected: true });
+  }, 60_000);
+});

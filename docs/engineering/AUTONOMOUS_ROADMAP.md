@@ -7,7 +7,7 @@ external prerequisite is missing. Nothing is marked from a previous report.
 ## Current position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphase in progress:** 3.22 (AI assistant and tool system audit); 3.21 complete
+- **Subphase in progress:** 3.23 (cron / CI-CD / operations audit); 3.22 complete
 - **Commit:** see `SESSION_CHECKPOINT.md`
 
 ## Phase 3
@@ -28,8 +28,8 @@ external prerequisite is missing. Nothing is marked from a previous report.
 | **3.19.3** apply `0007` | **BLOCKED** | Needs a backup, then explicit authorization |
 | **3.20** security & privacy audit | **VERIFIED** | SEC-001, SEC-002 found and fixed; `tests/security-audit.test.ts`, confirmed to fail against the unfixed code |
 | **3.21** database integrity audit | COMPLETE in code, **dormant in production** | BUG-007: `tests/concurrency.test.ts` (6/7 fail unfixed, 11/11 pass fixed); migration `0008` unapplied |
-| 3.22 AI assistant & tool audit | **NEXT** | |
-| 3.23 cron / CI-CD / operations | PARTLY DONE via 3.19.x | Formal pass not run |
+| **3.22** AI assistant & tool audit | COMPLETE | SEC-006 fixed and verified against a production build; SEC-007 mitigated with a stated caveat; `tests/ai-audit.test.ts` |
+| 3.23 cron / CI-CD / operations | **NEXT** — partly done via 3.19.x | Formal pass not run |
 | 3.24 UX / accessibility | NOT STARTED | |
 | 3.25 performance & scalability | NOT STARTED | Earlier work in 3.9/3.11 |
 | 3.26 bug & debt remediation | ONGOING | Driven by `BUG_REGISTER.md` |
@@ -46,6 +46,7 @@ NOT STARTED. Phase 3 must reach a trustworthy state first, which is the stated p
 | 3.19.2B | `DATABASE_URL` and `BACKUP_PASSPHRASE` not set in GitHub | Repository owner |
 | 3.19.3 | No backup, and no authorization given | Owner, after 3.19.2B |
 | `0008` (BUG-007 fix becoming live) | Queued behind `0007`; same backup and authorization | Owner |
+| Removing `audit322@example.com` from production | One `DELETE`, refused by this environment; see PRODUCTION_SAFETY.md | Owner |
 | SEC-003 | `APP_URL` and `CRON_SECRET` not set in GitHub | Repository owner |
 | Vercel cron confirmation | No access to Vercel environment variables | Owner |
 | Real-model AI evaluation | No `ANTHROPIC_API_KEY` in this environment | Owner |
@@ -60,8 +61,8 @@ An agent may not set secrets, so these will not clear themselves and are not ret
                                         └──> AI usage measurable ──> any future quota
                                         └──> 0008 ──> BUG-007 actually fixed in production
 SEC-003 (secrets) ──> frequent maintenance runs ──> BUG-006 re-measurable
-3.20 ──> 3.21 ──> 3.22 ──> 3.27
+3.20 ──> 3.21 ──> 3.22 ──> 3.23 ──> 3.27
 ```
 
-Everything below 3.22 is independent of the production blockers and can proceed. 3.21 itself
-proceeded: the code and its tests are done, only the schema change waits.
+Everything below 3.23 is independent of the production blockers and can proceed. 3.21 and 3.22
+both proceeded in full; only 3.21's schema change waits.

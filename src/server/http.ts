@@ -14,6 +14,23 @@ export const notFound = (what = "Resource") => new AppError(404, `${what} not fo
 export const badRequest = (msg: string, details?: unknown) => new AppError(400, msg, details);
 export const forbidden = (msg = "Forbidden") => new AppError(403, msg);
 
+/**
+ * Every dynamic `[id]` segment in this app addresses a row whose primary key is a UUID — there are
+ * only two dynamic segment names in `src/app/api`, `id` and `kind`. A malformed one used to reach
+ * Postgres and come back as a 500 with the failing statement and its bound parameters in the server
+ * log, which let any caller mint 500s at will and buried real faults in the noise.
+ *
+ * The guard lives in `withAuth` rather than in each handler so a route added later cannot forget it.
+ * The answer is 404 — deliberately the same answer a well-formed id belonging to someone else gets,
+ * so nothing here tells a caller which ids are real.
+ */
+const RESOURCE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const isResourceId = (v: unknown): v is string => typeof v === "string" && RESOURCE_ID.test(v);
+export function assertResourceId(id: string, label = "Resource"): string {
+  if (!isResourceId(id)) throw notFound(label);
+  return id;
+}
+
 export function json<T>(data: T, init?: ResponseInit) {
   return NextResponse.json(data, init);
 }
@@ -53,7 +70,7 @@ type Ctx<P> = { params: Promise<P> };
 type Handler<P> = (req: Request, ctx: { user: SessionUser; params: P }) => Promise<Response>;
 
 /** Wraps a route handler with authentication, rate limiting and uniform error handling. */
-export function withAuth<P = Record<string, string>>(handler: Handler<P>, opts: { limit?: keyof typeof LIMITS } = {}) {
+export function withAuth<P = Record<string, string>>(handler: Handler<P>, opts: { limit?: keyof typeof LIMITS; resource?: string } = {}) {
   return async (req: Request, ctx?: Ctx<P>) => {
     try {
       // Before anything else that costs a query: a state-changing request must come from this app.
@@ -69,7 +86,11 @@ export function withAuth<P = Record<string, string>>(handler: Handler<P>, opts: 
       if (!rl.ok) return NextResponse.json({ error: "Too many requests" }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } });
       const gated = passwordGate(req, user);
       if (gated) return gated;
-      const params = ctx ? await ctx.params : ({} as P);
+      // Next passes a context object to every route handler, but `params` is only present on a
+      // dynamic one — so this has to tolerate `undefined`, not just a missing context.
+      const params = (ctx ? await ctx.params : undefined) ?? ({} as P);
+      const id = (params as { id?: unknown }).id;
+      if (id !== undefined) assertResourceId(String(id), opts.resource ?? "Resource");
       return await handler(req, { user, params });
     } catch (e) {
       return errorResponse(e);
@@ -84,7 +105,7 @@ export function withAuth<P = Record<string, string>>(handler: Handler<P>, opts: 
  * Being an administrator unlocks account management and nothing else: an admin route must never read
  * or write another user's module data.
  */
-export function withAdmin<P = Record<string, string>>(handler: Handler<P>, opts: { limit?: keyof typeof LIMITS } = {}) {
+export function withAdmin<P = Record<string, string>>(handler: Handler<P>, opts: { limit?: keyof typeof LIMITS; resource?: string } = {}) {
   return withAuth<P>(async (req, ctx) => {
     if (!isAdmin(ctx.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     return handler(req, ctx);

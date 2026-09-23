@@ -1,6 +1,6 @@
 # Architecture status
 
-Written from the repository at `0784150` + the 3.21 changes, not from prior reports.
+Written from the repository at `8c0531d` + the 3.22 changes, not from prior reports.
 `docs/ARCHITECTURE.md` remains the design document; this file records what is actually true now,
 including the parts that are true and unwelcome.
 
@@ -31,10 +31,12 @@ user → assistant route → agent loop → tool registry → the same services 
 | Authentication | `getCurrentUser()` resolves the cookie against `sessions ⋈ users WHERE is_active` | 3.18, re-tested 3.20 |
 | Authorization | `withAdmin` reads the role from the database row, never from the request | 3.18, re-tested 3.20 |
 | Ownership by reference | `assertOwned` / `assertAllOwned`, answering "not found" for a foreign id | 3.18 |
-| Resource id shape | `assertResourceId` in the CRUD factory | 3.20 |
+| Resource id shape | `assertResourceId` inside `withAuth`, so every route gets it | 3.22 (it was only in the CRUD factory until then — SEC-006) |
 | CSRF | `proxy.ts` inline origin check + `isTrustedOrigin` in `withAuth` (two layers) | 3.19.2 |
 | Redirect targets | `safeRedirect`, origin comparison rather than a prefix test | 3.20 |
 | AI tool surface | `tool-groups.ts` per mode; `kind` comes from the route's enum, never the message | 3.16 |
+| Tool confirmation | `runTool` sets `needs = risk === "high"` first, so a high-risk tool cannot opt out; `confirmed` is hard-coded `false` in the agent loop and only the confirm route sets it, after re-reading the pending row and claiming it with a conditional update | 3.22 |
+| Database target | `src/server/db` refuses a non-local host unless `NODE_ENV=production` or `ALLOW_REMOTE_DB=1` | 3.22, after an accidental write to production |
 
 **Two implementations of the CSRF rule exist** — `proxy.ts` has it inline, `security/origin.ts`
 exports it — and they can drift. Recorded as architecture debt below.
@@ -126,3 +128,9 @@ the six at realistic row counts, and add the index where a sequential scan actua
    `0007` lands there is no history to justify a number.
 6. **`drizzle.config.ts` defaults to `DATABASE_URL`**, so any `drizzle-kit` command points at
    production unless told otherwise. This has already caused one accidental (harmless) attempt.
+7. **The assistant reads third-party text in a loop that can act** (SEC-007). `get_market_news`
+   returns RSS headlines verbatim, and low-risk tools — `remember_memory` among them — execute
+   without a confirmation step. Mitigated by labelling the content and by a system-prompt rule;
+   the mitigation is an instruction to a model and has never been tested against a real one.
+8. **One production row does not belong there.** `audit322@example.com` was created by mistake in
+   this session and could not be removed from this environment; see PRODUCTION_SAFETY.md.

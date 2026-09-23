@@ -181,6 +181,31 @@ Revisit if watchlist management grows.
 
 ---
 
+## BUG-009 — `withAuth` assumed every route has `params`
+
+**Severity:** HIGH (self-inflicted, lived about ten minutes) · **Status:** fixed, verified
+
+Introduced while fixing SEC-006. The first version of the id guard read
+`(await ctx.params).id`, assuming `params` exists whenever `ctx` does. Next passes a context object
+to every route handler and only populates `params` on a dynamic route, so **every collection
+endpoint** — `/api/me`, `/api/tasks`, `/api/finance/categories`, `/api/goals`, `/api/journal`,
+`/api/notifications` — answered 500 with `Cannot read properties of undefined (reading 'id')`.
+
+Not caught by the type system: `params` is typed `P` and is `undefined` at runtime. Not caught by
+the test suite either, which exercises services rather than route handlers. It was caught by the
+HTTP probe that the SEC-006 work happened to be running, which is the argument for probing a real
+server rather than reading code.
+
+**Fix:** `(ctx ? await ctx.params : undefined) ?? ({} as P)`. Verified: 7 collection endpoints back
+to 200, 11 malformed-id probes still 404.
+
+**Worth noting about the diagnosis.** The first hypothesis was a corrupt `.next` — a `pkill -f
+next-server` had killed this agent's own shell mid-build, leaving a half-finished build directory.
+A clean rebuild reproduced the 500 identically, which ruled that out and sent the search to the
+right place.
+
+---
+
 ## Conventions
 
 - A bug is only recorded once reproduced.

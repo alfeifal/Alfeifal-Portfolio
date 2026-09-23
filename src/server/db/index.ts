@@ -8,9 +8,41 @@ declare global {
   var __personalOsPool: PgPool | NeonPool | undefined;
 }
 
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * Refuses a remote database from a process that is not the deployed application.
+ *
+ * This exists because of a specific mistake that is easy to repeat. A throwaway script that sets
+ * `process.env.NODE_ENV = "test"` and `DATABASE_URL` at the top of the file does *not* redirect a
+ * statically imported `@/server/db`: ESM evaluates the imports first, so this module picks its
+ * connection string from `.env` — production — before that assignment ever runs. The script looks
+ * local, reports success, and writes to the live database. It happened in this repository.
+ *
+ * `NODE_ENV=production` is the deployment and passes. Anything else reaching a non-local host has
+ * to say so, one command at a time, with `ALLOW_REMOTE_DB=1`. The message names only the hostname,
+ * never the URL.
+ */
+function assertIntendedTarget(url: string) {
+  if (process.env.NODE_ENV === "production" || process.env.ALLOW_REMOTE_DB === "1") return;
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return; // not a shape this guard understands; the driver will complain about it soon enough
+  }
+  if (LOCAL_HOSTS.has(host) || host.endsWith(".local")) return;
+  throw new Error(
+    `Refusing to connect to "${host}": NODE_ENV is ${process.env.NODE_ENV ?? "undefined"}, so this ` +
+      "process is not the deployed application. Point DATABASE_URL at a local database, or set " +
+      "ALLOW_REMOTE_DB=1 if reaching a remote one is genuinely what you mean to do.",
+  );
+}
+
 function connectionString() {
   const url = process.env.NODE_ENV === "test" ? process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL : process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not set");
+  assertIntendedTarget(url);
   return url;
 }
 
