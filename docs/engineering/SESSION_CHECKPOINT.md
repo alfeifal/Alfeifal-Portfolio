@@ -4,16 +4,20 @@ Written so the next session can continue without repeating anything.
 
 ## Read this first
 
-**One row exists in production that should not: `audit322@example.com`, plus the 131 rows it owns.**
-I created it by mistake in this session; the full story, exact scope and the one-line remedy are in
-`PRODUCTION_SAFETY.md` under *Incident*. This environment refused the `DELETE`, so it is waiting on
-the owner. The guard that prevents a repeat is in `src/server/db/index.ts` and is covered by six
-tests.
+The production incident from the previous working day is **closed**. `audit322@example.com` and the
+149 rows it owned were removed on 2026-10-02 under written authorization, with before/after counts
+and a read-only verification pass over all 51 tables carrying `user_id`. Production holds exactly one
+account and 311 rows, all the owner's. Full record: `PRODUCTION_SAFETY.md` → *Incident*, and
+SEC-008 in `SECURITY_REGISTER.md`.
+
+The guard that prevents a repeat is in `src/server/db/index.ts`, covered by six tests. It covers that
+module only — scripts building their own connection are still unchecked, which is listed as residual
+risk rather than quietly left out.
 
 ## Position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphases 3.21 and 3.22 — COMPLETE**
+- **Subphases 3.21 and 3.22 — COMPLETE**; the SEC-008 incident is closed
 - **Next action: start 3.23 — cron / CI-CD / operations audit** (partly done via 3.19.x; the formal
   pass has never been run). 3.19.2B, 3.19.3 and `0008` stay blocked; do not retry them, and do not
   ask for secrets in chat.
@@ -21,7 +25,7 @@ tests.
 ## Commit and git state
 
 - Branch `claude/personal-operating-system-nuoesg`
-- `0784150` → `8c0531d` (3.21, pushed) → this session's 3.22 commit, see `git log -1`
+- `0784150` → `8c0531d` (3.21) → `e2d03b3` (3.22) → `642c421` (chore) → the 3.23 work
 - Working tree clean, local == origin at the time of writing.
 
 ## What was done this session
@@ -81,7 +85,6 @@ tests.
 
 | Blocker | Needs |
 |---|---|
-| **Remove `audit322@example.com` from production** | The owner's go-ahead for one `DELETE` |
 | No production backup | `DATABASE_URL` + `BACKUP_PASSPHRASE` secrets in GitHub |
 | `0007` unapplied | A backup, then explicit authorization |
 | `0008` unapplied | The same; BUG-007 stays live in production until it lands |

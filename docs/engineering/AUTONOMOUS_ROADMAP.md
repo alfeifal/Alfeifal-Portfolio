@@ -7,7 +7,7 @@ external prerequisite is missing. Nothing is marked from a previous report.
 ## Current position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphase in progress:** 3.23 (cron / CI-CD / operations audit); 3.22 complete
+- **Subphase in progress:** 3.23 (cron / CI-CD / operations audit); 3.21 and 3.22 complete
 - **Commit:** see `SESSION_CHECKPOINT.md`
 
 ## Phase 3
@@ -46,7 +46,6 @@ NOT STARTED. Phase 3 must reach a trustworthy state first, which is the stated p
 | 3.19.2B | `DATABASE_URL` and `BACKUP_PASSPHRASE` not set in GitHub | Repository owner |
 | 3.19.3 | No backup, and no authorization given | Owner, after 3.19.2B |
 | `0008` (BUG-007 fix becoming live) | Queued behind `0007`; same backup and authorization | Owner |
-| Removing `audit322@example.com` from production | One `DELETE`, refused by this environment; see PRODUCTION_SAFETY.md | Owner |
 | SEC-003 | `APP_URL` and `CRON_SECRET` not set in GitHub | Repository owner |
 | Vercel cron confirmation | No access to Vercel environment variables | Owner |
 | Real-model AI evaluation | No `ANTHROPIC_API_KEY` in this environment | Owner |

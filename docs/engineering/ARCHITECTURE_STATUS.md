@@ -1,6 +1,6 @@
 # Architecture status
 
-Written from the repository at `8c0531d` + the 3.22 changes, not from prior reports.
+Written from the repository at `642c421`, not from prior reports.
 `docs/ARCHITECTURE.md` remains the design document; this file records what is actually true now,
 including the parts that are true and unwelcome.
 
@@ -132,5 +132,6 @@ the six at realistic row counts, and add the index where a sequential scan actua
    returns RSS headlines verbatim, and low-risk tools — `remember_memory` among them — execute
    without a confirmation step. Mitigated by labelling the content and by a system-prompt rule;
    the mitigation is an instruction to a model and has never been tested against a real one.
-8. **One production row does not belong there.** `audit322@example.com` was created by mistake in
-   this session and could not be removed from this environment; see PRODUCTION_SAFETY.md.
+8. **The database-target guard covers one module, not a perimeter.** `src/server/db` refuses a
+   remote host from a non-production process (SEC-008), but `scripts/migrate.ts`, `scripts/backup.sh`
+   and anything using `neon()` or `pg` directly build their own connections and are unchecked.

@@ -14,6 +14,7 @@ the fix.
 | SEC-005 | INFORMATIONAL | Rate limiting | Accepted, documented |
 | SEC-006 | MEDIUM | API error handling | Fixed, verified — SEC-002 was incomplete |
 | SEC-007 | MEDIUM | AI assistant | Mitigated, not eliminated — see the caveat |
+| SEC-008 | MEDIUM | Operations / tooling | Incident, **resolved**; guard added and tested |
 
 ---
 
@@ -253,6 +254,42 @@ assistant takes is written to `ai_action_logs` where the user can see it.
 **Not changed on purpose:** no risk level was raised and no confirmation was added or removed.
 Raising `remember_memory` to medium would close the durable path, but changing risk levels is
 outside what this phase was authorized to do. Recorded here as the open decision it is.
+
+---
+
+## SEC-008 — a development script wrote to the production database
+
+**Severity:** MEDIUM · **Status:** incident on 2026-09-23, data removed 2026-10-02 on written
+authorization, cause fixed in `e2d03b3`. **Mine, not the application's.**
+
+**Area:** `src/server/db/index.ts`, and any throwaway script that imports it
+
+**What happened.** A script meant to create a throwaway account on the local test database assigned
+`process.env.NODE_ENV = "test"` and `TEST_DATABASE_URL` in its module body, *after* a static
+`import { db } from "@/server/db"`. ESM evaluates imports first, so the database module read `.env` —
+production — and fixed its connection before either assignment ran. The script created
+`audit322@example.com` and 131 seeded rows in the live database and reported success.
+
+**Why this is a security finding and not only a mistake.** For nine days a non-admin account existed
+on the production deployment whose password was chosen inside an agent session. It was never logged
+into — `sessions` was unchanged by its deletion, proving no session ever existed for it — and
+per-user isolation means it could not have read the owner's data had anyone used it. But an
+unaccounted live credential is a finding whatever its blast radius, and it was reachable by anyone
+who could read this session's transcript.
+
+**Exposure, stated exactly:** one extra non-admin account; no session; no access to the owner's data;
+nothing of the owner's read, changed or deleted. Full before/after counts, the verification pass over
+all 51 tables carrying `user_id`, and the removal are in `PRODUCTION_SAFETY.md` under *Incident*.
+
+**Fix.** `src/server/db` refuses a non-local host unless `NODE_ENV=production` or
+`ALLOW_REMOTE_DB=1` is set for that one command; the error names only the hostname. Verified by
+re-running the script that caused it — it now throws at module load. Six regression tests in
+`tests/operations.test.ts`, each in its own child process because the guard fires once per process.
+
+**Residual risk.** The guard covers `@/server/db` only. `scripts/migrate.ts`, `scripts/backup.sh`
+and anything using `neon()` or `pg` directly build their own connections and are unchecked — partly
+deliberate, since the read-only production probes in these documents work that way. `drizzle-kit`
+remains unguarded and `push` remains forbidden. See `PRODUCTION_SAFETY.md` for the full list.
 
 ---
 

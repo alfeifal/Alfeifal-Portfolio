@@ -1,6 +1,6 @@
 # Production safety
 
-Last verified: 2026-09-23, against commit `8c0531d` plus the phase 3.22 changes.
+Last verified: 2026-10-02, against commit `642c421`.
 
 Nothing in this file is written from a previous report. Every line was checked in the session that
 wrote it, and anything that could not be checked says so.
@@ -113,49 +113,117 @@ Restoration has been exercised against a disposable database, not against produc
 Neon's own instant-restore window is an additional safety net on paper; it has not been checked from
 here, because that needs the Neon console or API.
 
-## Incident — an account was created in production by mistake (2026-09-23)
+## Incident — an account was created in production by mistake (2026-09-23, resolved 2026-10-02)
 
-Recorded here because it happened, it was my error, and the guard that now prevents it only makes
+Recorded in full because it happened, it was my error, and the guard that now prevents it only makes
 sense next to the story.
 
-**What happened.** Phase 3.22 needed a throwaway account on the *local test* database to probe API
-routes with a logged-in session. The script began:
+### Root cause
+
+Phase 3.22 needed a throwaway account on the *local test* database to probe API routes with a
+logged-in session. The script began:
 
 ```ts
 import "dotenv/config";
 Object.assign(process.env, { NODE_ENV: "test", DATABASE_DRIVER: "pg", DATABASE_SSL: "false" });
 process.env.TEST_DATABASE_URL ??= process.env.DATABASE_URL;
-import { db } from "@/server/db";          // ← evaluated BEFORE the line above
+import { db } from "@/server/db";          // ← evaluated BEFORE the two lines above
 ```
 
-ESM evaluates imports before any statement in the module body. `src/server/db` therefore read
-`.env` — `NODE_ENV` unset, so *production*, over the Neon driver — and chose its connection string
-before `Object.assign` ever ran. The script reported success. It had created
-`audit322@example.com` plus the 131 rows `bootstrapUserData()` seeds, in the live database.
+ESM evaluates every import before any statement in the module body. `src/server/db` therefore read
+`.env` — `NODE_ENV` unset, so the *production* branch, over the Neon driver — and fixed its
+connection string before `Object.assign` ever ran. `TEST_DATABASE_URL ??=` was likewise too late to
+matter. The script looked local, reported success, and had written to the live database.
 
-**How it was caught.** The login it was created for failed with 401 against the local server. That
-made no sense, so the next step was to look for the row — and it was not in the test database.
+### What was created
 
-**Exact scope, read from production.** One `users` row and 131 rows it owns: 20 categories, 49
-exercises, 49 training-day exercises, 8 training days, 1 each of accounts, subjects, trading
-accounts, training plans and watchlists. **No sessions** — the account was never logged into,
-because the local server was correctly pointed at the test database. Nothing belonging to the owner
-was read, modified or deleted. An earlier read-only probe in the same session left no rows behind
-(checked: zero `notifications` with a `probe:` dedupe key).
+| | |
+|---|---|
+| Account | `audit322@example.com`, created 2026-09-23 09:37:10 UTC, non-admin, `is_active = true` |
+| Rows at creation | **131**, all seeded by `bootstrapUserData()`: 20 categories, 49 exercises, 49 training-day exercises, 8 training days, and one each of accounts, subjects, trading accounts, training plans, watchlists |
+| Rows at deletion | **149** — the 131 above plus **18 notifications** the daily maintenance job generated for the account over the nine days it existed |
+| Sessions | **none, ever.** `sessions` was 6 before the delete and 6 after, so the cascade removed none: the account was never logged into. The local server it was created for was correctly pointed at the test database, which is why its login failed — and that failure is what exposed the mistake. |
 
-**Status: NOT cleaned up.** Removing the account is itself a write to production, and this
-environment refused the command. It needs the owner's decision — see *Open production blockers*.
+### What was *not* touched
 
-**The guard that now exists.** `src/server/db/index.ts` refuses a non-local host unless
-`NODE_ENV=production` (the deployment) or `ALLOW_REMOTE_DB=1` is set explicitly for that one
-command. The error names only the hostname, never the URL. Verified by running the exact script
-above again: it now throws at module load instead of connecting. Six tests in
-`tests/operations.test.ts` cover it, each in its own child process because the guard fires once per
-process.
+Nothing belonging to the owner was read, modified or deleted. An earlier read-only probe in the same
+session left nothing behind either (checked: zero `notifications` carrying a `probe:` dedupe key).
+
+### Detection
+
+The login the account was created for returned 401 against the local server. That made no sense, so
+the next step was to look for the row — and it was not in the test database. A read of production
+found it there.
+
+### Cleanup, 2026-10-02, on explicit written authorization
+
+One statement, `DELETE FROM users WHERE email = 'audit322@example.com'`, run after three
+preconditions were checked in the same script: the host ends in `.neon.tech`, `current_database()`
+is `neondb`, and exactly one row carries that address. Whole-table counts were taken before and
+after, for the nine seeded tables plus `users`, `sessions`, `notifications`, `ai_action_logs`,
+`audit_logs`, `transactions`, `tasks` and `journal_entries`.
+
+| | Before | After | Delta |
+|---|---|---|---|
+| `users` | 2 | 1 | −1 |
+| `notifications` | 47 | 29 | −18 |
+| `categories` | 41 | 21 | −20 |
+| `exercises` | 98 | 49 | −49 |
+| `training_day_exercises` | 98 | 49 | −49 |
+| `training_days` | 16 | 8 | −8 |
+| `accounts`, `subjects`, `trading_accounts`, `training_plans`, `watchlists` | 2 each | 1 each | −1 each |
+| `sessions` | 6 | 6 | **0** |
+| `ai_action_logs` | 41 | 41 | **0** |
+| `audit_logs` | 42 | 42 | **0** |
+| `transactions` | 2 | 2 | **0** |
+| `tasks`, `journal_entries` | 0 | 0 | **0** |
+
+The only delta that was not predicted in advance is the 18 notifications: the prediction was made on
+the day the account was created, when it owned none, and the daily job had been generating them for
+it ever since. A correct cascade, not collateral.
+
+### Verification afterwards (read-only, a second pass over all 51 tables carrying `user_id`)
+
+```
+rows still referencing the deleted account    : 0
+rows belonging to any account but the owner   : 0
+total rows belonging to the owner             : 311
+owner's notifications                         : 29   (= every notification in the database)
+users remaining                               : ayoub.afak.aaa@gmail.com (2026-09-14 17:49:18 UTC)
+```
+
+### Remediation
+
+`src/server/db/index.ts` refuses a non-local host unless `NODE_ENV=production` (the deployment) or
+`ALLOW_REMOTE_DB=1` is set explicitly for that one command. The error names only the hostname, never
+the URL or its credentials. Verified by re-running the exact script above: it now throws at module
+load instead of connecting.
+
+**Regression tests:** six, in `tests/operations.test.ts` under *"the database module refuses a remote
+host from a process that is not the deployment"*. Each runs in its own child process, because the
+guard fires once per process at module evaluation. They cover: refused with `NODE_ENV` unset;
+refused under `NODE_ENV=test` (the shape that caused this); the message naming the host and never
+the URL or credentials; allowed under `NODE_ENV=production`; allowed with `ALLOW_REMOTE_DB=1`;
+allowed for a local database with no ceremony.
+
+**Commit:** `e2d03b3` carries the guard and its tests. `642c421` follows it (unrelated chore).
 
 **Consequence for existing commands:** `pnpm db:seed` reaches production through `@/server/db`, so
-it now needs `ALLOW_REMOTE_DB=1` in front of it. `pnpm db:migrate` and `pnpm backup` build their
-own connections and are unaffected.
+it now needs `ALLOW_REMOTE_DB=1` in front of it. `pnpm db:migrate` and `pnpm backup` build their own
+connections and are unaffected — which is itself a gap, noted below.
+
+### Remaining risk
+
+1. **The guard only covers `@/server/db`.** `scripts/migrate.ts`, `scripts/backup.sh` and anything
+   using `neon()` or `pg` directly build their own connection and are not checked. That is partly
+   deliberate — the read-only production probes in these documents work that way — but it means the
+   guard is a safety net for one specific, repeated mistake, not a perimeter.
+2. **`drizzle-kit` is still unguarded.** `drizzle.config.ts` defaults to `DATABASE_URL`, so any
+   `drizzle-kit` command points at production unless told otherwise. `push` remains forbidden.
+3. **`ALLOW_REMOTE_DB=1` is one keystroke.** It is meant to be: the point is that reaching
+   production has to be typed deliberately, not that it is impossible.
+4. **Nothing was lost, and nothing is outstanding from this incident.** Production holds exactly one
+   account and 311 rows, all the owner's.
 
 ## Deployment restrictions
 
@@ -170,7 +238,6 @@ own connections and are unaffected.
 
 | Blocker | Needs |
 |---|---|
-| **Remove `audit322@example.com` from production** | The owner's go-ahead for one `DELETE`; see the incident above. The cascade removes exactly the 131 rows it owns and nothing else: `delete from users where email = 'audit322@example.com';` |
 | No backup | The two secrets above, set by the repository owner |
 | `0007` not applied | A verified backup, then explicit authorization |
 | `0008` not applied | The same; it applies after `0007` and BUG-007 stays live until it does |
