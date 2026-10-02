@@ -1,6 +1,6 @@
 # Architecture status
 
-Written from the repository at `642c421`, not from prior reports.
+Written from the repository at `a72c985` + the 3.23 changes, not from prior reports.
 `docs/ARCHITECTURE.md` remains the design document; this file records what is actually true now,
 including the parts that are true and unwelcome.
 
@@ -82,8 +82,15 @@ rather than on a lookup the second caller has not yet seen — **and `0008` is n
 production**, so in the deployment today those four writes are still not idempotent under overlap.
 
 Two schedulers: Vercel Cron daily (runs everything — Hobby caps at once a day) and GitHub Actions
-every 15 minutes for the frequent half. The daily pass is the full set on purpose, so nothing
-depends on the workflow existing.
+nominally every 15 minutes for the frequent half. The daily pass is the full set on purpose, so
+nothing depends on the workflow existing — which is just as well, because **the workflow has never
+once succeeded** (61 failures, missing secrets) and even when it does, GitHub delivers roughly one run
+every two and a half hours, about 12% of what the expression asks for. Both figures are measured; see
+PRODUCTION_SAFETY.md. Treat the frequent cadence as "a few times a day" in any design that rests on it.
+
+The daily pass takes 55.6–58.1 s against a 300 s platform ceiling, measured over eleven consecutive
+days in production. Since phase 3.23 it no longer fetches the news feeds twice (a job may declare it
+`supersedes` another) and the ingestion inserts 200 rows per statement instead of one.
 
 ## External dependencies
 
@@ -128,10 +135,18 @@ the six at realistic row counts, and add the index where a sequential scan actua
    `0007` lands there is no history to justify a number.
 6. **`drizzle.config.ts` defaults to `DATABASE_URL`**, so any `drizzle-kit` command points at
    production unless told otherwise. This has already caused one accidental (harmless) attempt.
-7. **The assistant reads third-party text in a loop that can act** (SEC-007). `get_market_news`
+7. **CI runs PostgreSQL 16; production runs 18.6.** The local development database is 16 too. Nothing
+   currently depends on the difference — migration `0008` needs 15+ and no further — but a feature
+   available on one and not the other would pass CI and fail production, or the reverse. Aligning CI
+   to 18 is the next step and was deliberately not bundled with the change that made CI run at all.
+8. **The GitHub Actions in use target Node 20**, which GitHub has deprecated; they are being forced
+   onto Node 24 with a warning today and will eventually stop. `actions/checkout`,
+   `pnpm/action-setup`, `actions/setup-node`, `actions/upload-artifact` all need a major bump, and
+   they are pinned to mutable tags rather than commit SHAs.
+9. **The assistant reads third-party text in a loop that can act** (SEC-007). `get_market_news`
    returns RSS headlines verbatim, and low-risk tools — `remember_memory` among them — execute
    without a confirmation step. Mitigated by labelling the content and by a system-prompt rule;
    the mitigation is an instruction to a model and has never been tested against a real one.
-8. **The database-target guard covers one module, not a perimeter.** `src/server/db` refuses a
+10. **The database-target guard covers one module, not a perimeter.** `src/server/db` refuses a
    remote host from a non-production process (SEC-008), but `scripts/migrate.ts`, `scripts/backup.sh`
    and anything using `neon()` or `pg` directly build their own connections and are unchecked.

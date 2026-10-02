@@ -3,11 +3,25 @@ on:
   push:
     branches: ["**"]
   pull_request:
+
+# This job only reads the repository. Without this block the token takes the repository default,
+# which can be write-all.
+permissions:
+  contents: read
+
+# A newer push to the same ref makes the older run's answer worthless, so stop paying for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
+        # NOTE: production runs PostgreSQL 18.6. This is 16, which is also what the project's
+        # local development database is. The mismatch is recorded in ARCHITECTURE_STATUS.md.
         image: postgres:16
         env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: personal_os_test }
         ports: ["5432:5432"]
@@ -18,8 +32,12 @@ jobs:
       AUTH_SECRET: ci-secret-not-for-production
     steps:
       - uses: actions/checkout@v4
+      # DO NOT add `with: { version: ... }` here. package.json carries `packageManager`, and
+      # pnpm/action-setup refuses to start when a version is given in both places:
+      #   "Multiple versions of pnpm specified ... Remove one of these versions"
+      # It did, for 43 consecutive runs, and every step after it was skipped — so nothing in this
+      # file had ever actually run. package.json is the single source of truth for the version.
       - uses: pnpm/action-setup@v4
-        with: { version: 10 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile

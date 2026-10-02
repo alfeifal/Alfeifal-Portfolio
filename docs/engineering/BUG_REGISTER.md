@@ -206,6 +206,115 @@ right place.
 
 ---
 
+## BUG-010 — CI had never run, on any commit
+
+**Severity:** HIGH · **Status:** fixed in phase 3.23, verified by the first green run
+
+**43 consecutive CI runs failed**, every one of them at step 4 of 11, in under a second:
+
+```
+Error: Multiple versions of pnpm specified:
+  - version 10 in the GitHub Action config with the key "version"
+  - version pnpm@10.33.0 in the package.json with the key "packageManager"
+Remove one of these versions to avoid version mismatch errors like ERR_PNPM_BAD_PM_VERSION
+```
+
+`pnpm/action-setup@v4` refuses to start when the version is given in two places. Every step after it
+— install, typecheck, lint, migrate, **test**, build — was skipped. So the suite has never run in CI,
+on any commit in this project's history, including every commit of phases 3.19 through 3.22.
+
+**This qualifies every "clean" report made before now.** Those runs were real, but they were local.
+Nobody checked the one place that runs the suite against an empty database on a machine nobody has
+been tinkering with, and that omission hid BUG-011.
+
+**Fix:** drop `with: { version: 10 }` and let the action read `packageManager`, which keeps one source
+of truth for the version. Also added to `ci.yml`, which had none of them: `permissions: contents:
+read`, `timeout-minutes: 20`, and `concurrency` with `cancel-in-progress`.
+
+**Regression tests:** six, in `tests/operations.test.ts`, reading the workflow as configuration —
+including one that fails if a `version:` reappears under that step. Four of them fail against the old
+`ci.yml`.
+
+---
+
+## BUG-011 — three tests asserted nothing, and hid a real defect
+
+**Severity:** MEDIUM · **Status:** fixed in phase 3.23
+
+The "an instance can never be left with nobody able to administer it" block opened every case with:
+
+```ts
+if ((await activeAdminCount()) > 1) return;   // "only meaningful while this really is the last one"
+```
+
+`activeAdminCount()` is global, and other suites leave administrators behind, so on any database that
+is not empty the three cases returned before asserting anything. They had been green for weeks.
+
+Rebuilding the local test database from scratch made the count 1, the bodies ran for the first time,
+and **all three failed**. They called the action with the sole administrator as *both* actor and
+target, so the self-protection guard answered first and the message never mentioned the last
+administrator:
+
+| Expected | Actually returned |
+|---|---|
+| `/last active administrator/i` | `Delete your own account from Settings, where it asks for your password` |
+| `/last active administrator/i` | `You cannot deactivate your own account` |
+| `/last active administrator/i` | `You cannot remove your own administrator role` |
+
+**What the audit then established.** The "last active administrator" refusal is unreachable in the
+dangerous direction. `getCurrentUser` joins on `is_active`, so the actor is always an active
+administrator; acting on somebody else therefore always leaves the actor behind, and acting on
+yourself hits the self-guard first. **The invariant holds — but the self-guards are what hold it**,
+not the guard the tests were named after. The backstop is kept, because a future path that lets an
+administrator act on another without the self-guard would need it.
+
+**And a real defect it exposed.** The guard counts *active* administrators, so an inactive
+administrator is not the last of anything. `deleteUserAsAdmin` checked `target.isActive`;
+`setUserActive` and `setUserRole` did not, and refused to demote or deactivate an administrator who
+could not sign in anyway. Fixed by adding `target.isActive` to both, matching the third.
+
+**Tests rewritten** to assert the mechanism that actually works, with no vacuous early return: the
+sole administrator cannot deactivate, demote or delete themselves and remains active afterwards; with
+two administrators removing one is allowed; a dormant administrator may be demoted. Where the guard
+depends on there being exactly one active administrator, the test now *forces* that condition and
+restores the others afterwards rather than skipping when it does not hold. Two of the four fail
+against the unfixed guards.
+
+---
+
+## BUG-012 — the daily maintenance pass did the news ingestion twice, one row at a time
+
+**Severity:** MEDIUM · **Status:** fixed in phase 3.23; the production effect is **not yet measured**
+
+Two separate wastes in the one scheduled path that actually runs:
+
+1. **Twice.** The daily invocation carries no `?scope=`, so it selects every job — and `news`
+   (`refreshNews(false)`, which respects a 15-minute cache) ran immediately before `newsForced`
+   (`refreshNews(true)`, which ignores it). On a cold serverless instance the cache is empty, so both
+   fetched all thirteen feeds and re-inserted the same items, back to back, for no benefit.
+2. **One row at a time.** `refreshNews` looped over up to 400 items issuing one `INSERT … ON CONFLICT
+   DO NOTHING` per item — up to 400 sequential round trips to a database in another region, twice.
+
+**Measured in production (read-only):** the daily pass takes 55.6–58.1 s wall clock, every day across
+eleven days. That is against a **300 s** ceiling (Vercel Hobby default and maximum with fluid compute,
+per their documentation, consulted 2026-10-02), so it was never close to timing out — an earlier
+suspicion that it was hitting a limit was wrong. It is still most of a minute of Neon compute a day on
+a 100 CU-hour monthly budget.
+
+**Fix:** `newsForced` declares `supersedes: "news"`, and `runMaintenance` skips a job another
+*selected* job supersedes — so the frequent scope on its own still refreshes the news. And the insert
+is batched 200 rows per statement, after deduplicating by URL in JavaScript (two feeds carrying the
+same story would otherwise put the same URL in one statement, which the arbiter index cannot resolve
+against a row the same command is still inserting). 400 statements become 2.
+
+**What is not claimed:** the production duration after this change. It needs a deployment, which this
+phase was not authorized to do. The structural change is certain; the saving is not yet observed.
+
+**Regression tests:** three, including one that spies on `refreshNews` and asserts the unscoped run
+calls it exactly once, with `force: true`. Two fail against the unfixed registry.
+
+---
+
 ## Conventions
 
 - A bug is only recorded once reproduced.

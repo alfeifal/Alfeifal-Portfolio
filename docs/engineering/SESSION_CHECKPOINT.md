@@ -17,53 +17,59 @@ risk rather than quietly left out.
 ## Position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphases 3.21 and 3.22 — COMPLETE**; the SEC-008 incident is closed
-- **Next action: start 3.23 — cron / CI-CD / operations audit** (partly done via 3.19.x; the formal
-  pass has never been run). 3.19.2B, 3.19.3 and `0008` stay blocked; do not retry them, and do not
-  ask for secrets in chat.
+- **Subphases 3.21, 3.22 and 3.23 — COMPLETE**; the SEC-008 incident is closed
+- **Next action: start 3.24 — UX / accessibility / responsive audit.** 3.19.2B, 3.19.3 and `0008` stay
+  blocked; do not retry them, and do not ask for secrets in chat.
 
 ## Commit and git state
 
 - Branch `claude/personal-operating-system-nuoesg`
-- `0784150` → `8c0531d` (3.21) → `e2d03b3` (3.22) → `642c421` (chore) → the 3.23 work
+- `0784150` → `8c0531d` (3.21) → `e2d03b3` (3.22) → `642c421`, `a72c985` (chores) → `77c7665` (incident
+  docs) → the 3.23 commit
 - Working tree clean, local == origin at the time of writing.
 
-## What was done this session
+## What was done
 
-1. **3.21 — database integrity.** Money precision audited and found sound. Four check-then-insert
-   races reproduced (BUG-007) and fixed with migration `0008` plus `ON CONFLICT DO NOTHING`, written
-   to be inert until the migration is applied. Corrected the false 3.19 claim that "every job is
-   idempotent". Commit `8c0531d`.
-2. **3.22 — AI assistant and tool system.**
-   - **SEC-006:** the 3.20 id guard only ever covered the CRUD factory. Eight hand-written routes
-     answered **500** to a malformed id, probed against a production build. The guard moved into
-     `withAuth`; all 11 probes now answer 404.
-   - **A second defect the same probe exposed:** the first version of that guard assumed
-     `ctx.params` exists whenever `ctx` does. It does not — Next only populates `params` on a
-     dynamic route — so every collection endpoint answered 500 until it was fixed. Caught by
-     probing, not by types.
-   - **SEC-007:** `get_market_news` hands verbatim third-party RSS text to a loop that can call
-     write tools, and low-risk tools (`remember_memory` among them) run with no confirmation.
-     Mitigated by labelling the content and adding a system-prompt rule. **The mitigation is an
-     instruction to a model and has never met one; the register says so explicitly.**
-   - **Checked and found sound:** high-risk tools always require confirmation regardless of their
-     own `needsConfirmation`; `confirmed` is hard-coded false in the agent loop and only the confirm
-     route sets it, after re-reading the row and claiming it with a conditional update; no
-     destructive tool is classified `read`; the model never receives a user id or a role.
-   - **Not changed, on purpose:** no risk level and no confirmation was touched (standing rule). The
-     open decision — whether `remember_memory` should be medium — is recorded, not taken.
-3. **The database-target guard**, written after the incident above and verified by re-running the
-   exact script that caused it.
+1. **3.21 — database integrity.** Money precision sound. Four check-then-insert races reproduced
+   (BUG-007), fixed with migration `0008` plus `ON CONFLICT DO NOTHING`, written to be inert until the
+   migration is applied. Corrected the false 3.19 claim that every job is idempotent.
+2. **3.22 — AI assistant and tool system.** SEC-006: the 3.20 id guard only covered the CRUD factory;
+   eight hand-written routes answered 500 to a malformed id. Guard moved into `withAuth`. BUG-009, found
+   by the same probe: that guard assumed `ctx.params` always exists, and every collection endpoint 500'd
+   until fixed. SEC-007: third-party RSS text reaches a tool-enabled loop; mitigated by labelling, with
+   the caveat that no test here can show a model obeys a label.
+3. **The production incident (SEC-008) is closed** — account removed under written authorization, full
+   before/after counts in PRODUCTION_SAFETY.md, guard in `src/server/db/index.ts` with six tests.
+4. **3.23 — cron / CI-CD / operations.** The big one:
+   - **BUG-010: CI had never run.** 43 runs, every one failed at `pnpm/action-setup` because `ci.yml`
+     pinned a pnpm version that `package.json` also pins. Install, typecheck, lint, migrate, **test**
+     and build were skipped on every commit in this project's history. Fixed, plus `permissions`,
+     `timeout-minutes` and `concurrency`, which `ci.yml` had none of.
+   - **BUG-011: three tests asserted nothing.** They opened with `if (activeAdminCount() > 1) return`,
+     and the count is global, so on any non-empty database they returned immediately. A freshly built
+     test database made them run — and fail. The audit then established that the "last active
+     administrator" guard is unreachable in the dangerous direction and that the **self-guards** are
+     what hold the invariant; and it exposed a real defect, `setUserActive`/`setUserRole` refusing to
+     demote an *inactive* administrator. Fixed and rewritten to force the condition instead of skipping.
+   - **BUG-012: the daily pass fetched every RSS feed twice**, one row per statement, up to 400 of them.
+     Fixed with a `supersedes` declaration and batched inserts. The production saving is **not yet
+     measured** — that needs a deployment.
+   - **Measured, not assumed:** the Vercel daily cron has run every day for eleven days and takes
+     55.6–58.1 s against a **300 s** ceiling (not 60 s — I had the wrong number and the wrong
+     conclusion). The GitHub workflow has never once succeeded in 61 runs, and even working, delivers
+     ~12% of its configured cadence.
+   - **`.claude/hooks/session-start.sh`** builds the local test database so no future session has to
+     rediscover it. Validated from nothing: 904 tests pass on the database it provisions.
 
 ## Tests run
 
 | | |
 |---|---|
-| Full suite | **895 passed / 38 files** (session start: 867 / 36) |
-| New | `tests/concurrency.test.ts` (11), `tests/ai-audit.test.ts` (11), 6 db-guard tests in `tests/operations.test.ts` |
-| Fails against the unfixed code | 6/7 concurrency assertions; the AI-001 location test; 2 of the 3 AI-002 assertions |
+| Full suite | **904 passed / 38 files** (session start: 867 / 36) |
+| New this session | `tests/concurrency.test.ts` (11), `tests/ai-audit.test.ts` (11), 6 db-guard + 8 CI/cron tests in `tests/operations.test.ts`; 3 vacuous admin tests replaced by 4 real ones |
+| Confirmed to fail against the unfixed code | 6/7 concurrency; AI-001 location; 2/3 AI-002; 4 CI-config; 1 idempotence-claim; 2 supersede; 2 admin-guard |
 | Typecheck / lint / build | clean; 18 pre-existing lint warnings, unchanged |
-| Route probes | production build, logged-in session: 11 malformed ids → 404, 7 collections → 200 |
+| Session-start hook | run from a stopped cluster: initialised, migrated, 904 tests green; second run a no-op |
 
 ## Harness lessons worth not repeating
 
@@ -77,6 +83,14 @@ risk rather than quietly left out.
   kill that.
 - **Asserting on `run.toString()` is fragile** — the transpiler renames things. Call the tool and
   look at what it returns.
+- **A green local suite is not a green suite.** CI had been red for 43 runs while every report here
+  said "clean". Check the actual CI run, not just the local one — and a suite that only passes on a
+  database somebody has been using is not passing for the right reason.
+- **`if (someGlobalCount() > 1) return;` in a test is an assertion that never runs.** Force the
+  condition the guard needs and restore it afterwards.
+- **`service postgresql start` is not enough here**: the project's test database is a separate cluster
+  on port 5433 with a socket in `/tmp`. The session-start hook now handles it; if it ever needs doing
+  by hand, that script is the reference.
 - Carried forward: assert on `hits`/`total` not raw response text; `DELETE /api/me/sessions`
   reissues the cookie; clear `rate_limits` between probe phases; tests that count rows need their
   own user.

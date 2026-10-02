@@ -14,16 +14,25 @@ name: Scheduled maintenance
 # committed to. Changing the default branch silently stops this schedule.
 #
 # Delivery is best effort in both directions: GitHub warns that "some queued jobs may be dropped"
-# under load and that schedules are delayed at the top of the hour. Every job behind this endpoint is
-# idempotent (see src/server/services/maintenance.ts), so a duplicate run is a no-op and a missed one
-# is made up by the next.
+# under load and that schedules are delayed at the top of the hour.
+#
+# MEASURED, not assumed: over a 30-hour sample this schedule delivered 12 runs — roughly one every
+# two and a half hours, about 12% of the 96 a day the expression above asks for. Treat the cadence as
+# "a few times a day", never as "every 15 minutes".
+#
+# A missed run is made up by the next. A duplicate run is a no-op only where the work is actually
+# idempotent, and four writes behind this endpoint were NOT, under overlap: see BUG-007. They are
+# guarded by unique constraints in migration 0008, which is not yet applied to production, so until
+# it is, an overlapping pair of runs can still duplicate a notification, a category, a budget or a
+# watchlist entry. `concurrency` below is what keeps that from happening via this workflow.
 
 on:
   schedule:
     - cron: "7,22,37,52 * * * *" # every 15 min, off the hour — the top of the hour is when Actions is most congested
   workflow_dispatch: # so it can be run by hand without waiting for the schedule
 
-# One run at a time. Overlap would be harmless, but there is no reason to pay for it.
+# One run at a time. Until migration 0008 is applied this is not merely thrift: two overlapping runs
+# can duplicate rows (BUG-007), and this is what prevents that for this scheduler.
 concurrency:
   group: scheduled-maintenance
   cancel-in-progress: false

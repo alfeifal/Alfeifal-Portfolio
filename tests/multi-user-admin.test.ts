@@ -320,6 +320,20 @@ d("deleting an account from the admin panel", () => {
 // The guards, applied to every destructive power — old and new alike.
 // ---------------------------------------------------------------------------------------------
 d("an instance can never be left with nobody able to administer it", () => {
+  /*
+   * This block used to open each case with `if ((await activeAdminCount()) > 1) return;`, meaning it
+   * asserted nothing whenever any other suite had left an administrator behind — which, on a database
+   * that is not empty, is always. On a freshly migrated database the guard clause stopped firing, the
+   * bodies ran for the first time, and all three failed: they called the action with the sole
+   * administrator as *both* actor and target, so the self-protection guard answered first and the
+   * message never mentioned the last administrator at all.
+   *
+   * What actually holds the invariant is the pair of self-guards. The "last active administrator"
+   * refusal behind them is unreachable in the dangerous direction: the actor is always an active
+   * administrator (`getCurrentUser` joins on `is_active`), so acting on somebody else always leaves
+   * the actor behind. These tests now say that, and force the global condition rather than skipping
+   * when it does not happen to hold.
+   */
   let soleAdmin: U, plain: U;
   beforeAll(async () => {
     soleAdmin = await createTestUser(); plain = await createTestUser();
@@ -327,37 +341,91 @@ d("an instance can never be left with nobody able to administer it", () => {
   });
   afterAll(async () => { await deleteTestUser(soleAdmin.id); await deleteTestUser(plain.id); });
 
-  const soleAdminCase = async (fn: () => Promise<unknown>) => {
-    // Only meaningful while this really is the last one; other suites may run concurrently.
-    if ((await activeAdminCount()) > 1) return;
-    const err = await fail(fn());
-    expect(err?.status).toBe(400);
-    expect(err?.message).toMatch(/last active administrator/i);
+  /**
+   * Runs `fn` with `keep` as the only active administrator in the database, then puts every other one
+   * back. Other suites leave administrators behind and `activeAdminCount()` is global, so the
+   * condition these guards depend on has to be created rather than hoped for.
+   */
+  const asTheOnlyAdmin = async (keep: string, fn: () => Promise<void>) => {
+    const others = (await db.select({ id: users.id }).from(users).where(and(eq(users.role, "admin"), eq(users.isActive, true))))
+      .map((r) => r.id).filter((id) => id !== keep);
+    for (const id of others) await db.update(users).set({ isActive: false }).where(eq(users.id, id));
+    try {
+      expect(await activeAdminCount(), "the fixture must really be the only active administrator").toBe(1);
+      await fn();
+    } finally {
+      for (const id of others) await db.update(users).set({ isActive: true }).where(eq(users.id, id));
+    }
   };
 
-  it("the last administrator cannot be deleted by another administrator", async () => {
+  it("the sole administrator cannot deactivate, demote or delete themselves", async () => {
+    await asTheOnlyAdmin(soleAdmin.id, async () => {
+      for (const [what, run] of [
+        ["deactivate", () => setUserActive(soleAdmin, soleAdmin.id, false)],
+        ["demote", () => setUserRole(soleAdmin, soleAdmin.id, "user")],
+        ["delete", () => deleteUserAsAdmin(soleAdmin, soleAdmin.id)],
+      ] as const) {
+        const err = await fail(run());
+        expect(err?.status, what).toBe(400);
+        expect(err?.message, what).toMatch(/your own|from Settings/i);
+      }
+      // The invariant, stated directly: three attempts, and somebody can still administer it.
+      expect(await activeAdminCount()).toBe(1);
+      const after = await reread(soleAdmin.id);
+      expect(after.isActive).toBe(true);
+      expect(after.role).toBe("admin");
+    });
+  });
+
+  it("with a second administrator, removing one is allowed and the other remains", async () => {
     const second = await createTestUser();
     await promote(second.id);
     const secondRow = await reread(second.id);
-    // With two admins this is allowed; the guard is what stops the *last* one going.
-    await deleteUserAsAdmin(secondRow, soleAdmin.id).catch(() => {});
-    const stillThere = await reread(soleAdmin.id);
-    if (!stillThere) {
-      // It was deleted because a second administrator existed — that is correct. Restore the fixture.
-      soleAdmin = await createTestUser();
-      await promote(soleAdmin.id);
+    try {
+      const before = await activeAdminCount();
+      await setUserActive(secondRow, soleAdmin.id, false);
+      expect(await activeAdminCount()).toBe(before - 1);
+      expect((await reread(soleAdmin.id)).isActive).toBe(false);
+    } finally {
+      await db.update(users).set({ isActive: true }).where(eq(users.id, soleAdmin.id));
       soleAdmin = await reread(soleAdmin.id);
+      await deleteTestUser(second.id);
     }
-    await deleteTestUser(second.id);
-    await soleAdminCase(() => deleteUserAsAdmin(soleAdmin, soleAdmin.id));
+    expect(await activeAdminCount()).toBeGreaterThanOrEqual(1);
   });
 
-  it("the last administrator cannot be deactivated", async () => {
-    await soleAdminCase(() => setUserActive(soleAdmin, soleAdmin.id, false));
+  it("an administrator who cannot sign in anyway may still be demoted or deactivated", async () => {
+    // The guard counts *active* administrators, so an inactive one is not the last of anything.
+    // `deleteUserAsAdmin` always checked `target.isActive`; the other two did not, and refused this.
+    const dormant = await createTestUser();
+    await promote(dormant.id);
+    await db.update(users).set({ isActive: false }).where(eq(users.id, dormant.id));
+    try {
+      await asTheOnlyAdmin(soleAdmin.id, async () => {
+        await expect(setUserRole(soleAdmin, dormant.id, "user")).resolves.toBeTruthy();
+        expect((await reread(dormant.id)).role).toBe("user");
+        await promote(dormant.id);
+        await expect(setUserActive(soleAdmin, dormant.id, false)).resolves.toBeTruthy();
+      });
+    } finally {
+      await deleteTestUser(dormant.id);
+    }
   });
 
-  it("the last administrator cannot be demoted", async () => {
-    await soleAdminCase(() => setUserRole(soleAdmin, soleAdmin.id, "user"));
+  it("the last-administrator refusal is unreachable from the admin surface, and that is recorded", () => {
+    // Not dead weight — it is the backstop if a future path ever lets an administrator act on another
+    // administrator without the self-guard in front. But it is not what holds the invariant today,
+    // and nothing in this suite may claim it is.
+    const src = readFileSync("src/server/services/admin.ts", "utf8");
+    for (const fn of ["setUserActive", "setUserRole", "deleteUserAsAdmin"]) {
+      const body = src.slice(src.indexOf(`export async function ${fn}(`));
+      const selfGuard = body.indexOf("target.id === admin.id");
+      const lastGuard = body.indexOf("last active administrator");
+      expect(selfGuard, `${fn} must guard self-action`).toBeGreaterThan(-1);
+      expect(lastGuard, `${fn} must keep the backstop`).toBeGreaterThan(-1);
+      expect(selfGuard, `${fn}: the self-guard has to come first`).toBeLessThan(lastGuard);
+      expect(body.slice(0, lastGuard + 200), `${fn} must not refuse an inactive target`).toMatch(/target\.isActive/);
+    }
   });
 
   it("a deactivated administrator does not count towards the total", async () => {

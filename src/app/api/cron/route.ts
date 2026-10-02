@@ -19,8 +19,14 @@ import { ALL_SCOPES, isJobScope, runMaintenance, type JobScope } from "@/server/
  * an exception in the proxy: no new hole is opened for anything else.
  *
  * The verb is a lie about the semantics — this writes — but it is the verb the platform sends, and a
- * maintenance endpoint nobody can call is worse than an imprecise one. Every job is idempotent, so
- * the usual reason to insist on POST (a repeated request doing the work twice) does not apply here.
+ * maintenance endpoint nobody can call is worse than an imprecise one.
+ *
+ * ON REPEATED DELIVERY. An earlier version of this comment said every job is idempotent, which was
+ * only ever checked by running each job twice in sequence. Four of them duplicate rows when two runs
+ * overlap (BUG-007); the unique constraints that make them atomic are in migration 0008, which is
+ * not yet applied to production. Each scheduler serialises itself — `concurrency` in the workflow,
+ * one invocation per schedule on Vercel — so the remaining exposure is the two schedulers colliding,
+ * which the daily and frequent windows do not currently do.
  */
 
 /**

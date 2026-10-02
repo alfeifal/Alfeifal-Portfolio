@@ -7,7 +7,7 @@ external prerequisite is missing. Nothing is marked from a previous report.
 ## Current position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphase in progress:** 3.23 (cron / CI-CD / operations audit); 3.21 and 3.22 complete
+- **Subphase in progress:** 3.24 (UX / accessibility audit); 3.21, 3.22 and 3.23 complete
 - **Commit:** see `SESSION_CHECKPOINT.md`
 
 ## Phase 3
@@ -29,8 +29,8 @@ external prerequisite is missing. Nothing is marked from a previous report.
 | **3.20** security & privacy audit | **VERIFIED** | SEC-001, SEC-002 found and fixed; `tests/security-audit.test.ts`, confirmed to fail against the unfixed code |
 | **3.21** database integrity audit | COMPLETE in code, **dormant in production** | BUG-007: `tests/concurrency.test.ts` (6/7 fail unfixed, 11/11 pass fixed); migration `0008` unapplied |
 | **3.22** AI assistant & tool audit | COMPLETE | SEC-006 fixed and verified against a production build; SEC-007 mitigated with a stated caveat; `tests/ai-audit.test.ts` |
-| 3.23 cron / CI-CD / operations | **NEXT** — partly done via 3.19.x | Formal pass not run |
-| 3.24 UX / accessibility | NOT STARTED | |
+| **3.23** cron / CI-CD / operations | COMPLETE | BUG-010/011/012 fixed; cadence and duration measured in production; `.claude/hooks/session-start.sh` added |
+| 3.24 UX / accessibility | **NEXT** | |
 | 3.25 performance & scalability | NOT STARTED | Earlier work in 3.9/3.11 |
 | 3.26 bug & debt remediation | ONGOING | Driven by `BUG_REGISTER.md` |
 | 3.27 full regression / release readiness | NOT STARTED | Cannot pass while production blockers stand |
@@ -60,8 +60,9 @@ An agent may not set secrets, so these will not clear themselves and are not ret
                                         └──> AI usage measurable ──> any future quota
                                         └──> 0008 ──> BUG-007 actually fixed in production
 SEC-003 (secrets) ──> frequent maintenance runs ──> BUG-006 re-measurable
-3.20 ──> 3.21 ──> 3.22 ──> 3.23 ──> 3.27
+3.20 ──> 3.21 ──> 3.22 ──> 3.23 ──> 3.24 ──> 3.27
 ```
 
-Everything below 3.23 is independent of the production blockers and can proceed. 3.21 and 3.22
-both proceeded in full; only 3.21's schema change waits.
+Everything below 3.24 is independent of the production blockers and can proceed. 3.21, 3.22 and 3.23
+all proceeded in full; what waits is 3.21's schema change and, for 3.23, a deployment to confirm the
+news-ingestion saving and the secrets only the owner can set.

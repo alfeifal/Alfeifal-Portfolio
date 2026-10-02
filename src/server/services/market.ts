@@ -29,15 +29,32 @@ export async function getQuotes(symbols: { symbol: string; assetClass: AssetClas
   return { quotes: [...fresh.values()], missing };
 }
 
+/**
+ * How many rows go into one INSERT. This used to be one row per statement, in a loop over up to 400
+ * items — up to 400 sequential round trips to a database that is not on this machine. Measured in
+ * production, the daily maintenance pass took 56-58 seconds wall clock, and the news ingestion was
+ * nearly all of it; the database is on the Neon free tier, where that time is also compute budget.
+ * Batching turns 400 round trips into 2.
+ */
+const NEWS_INSERT_BATCH = 200;
+
 export async function refreshNews(force = false) {
   if (!force && Date.now() - lastNewsRefresh < NEWS_TTL_MS) return 0;
   lastNewsRefresh = Date.now();
   const items = await newsProvider().getNews({ limit: 400 });
+  // Two feeds carrying the same story would put the same url in one statement, and the arbiter index
+  // cannot resolve a conflict against a row the same command is still inserting. Deduplicate first.
+  const byUrl = new Map<string, (typeof items)[number]>();
+  for (const n of items) if (!byUrl.has(n.url)) byUrl.set(n.url, n);
+  const rows = [...byUrl.values()].map((n) => ({
+    headline: n.headline, source: n.source, url: n.url, publishedAt: n.publishedAt,
+    category: n.category, summary: n.summary ?? null, symbols: n.symbols ?? [], provider: n.provider,
+  }));
   let inserted = 0;
-  for (const n of items) {
+  for (let i = 0; i < rows.length; i += NEWS_INSERT_BATCH) {
     const r = await db
       .insert(marketNews)
-      .values({ headline: n.headline, source: n.source, url: n.url, publishedAt: n.publishedAt, category: n.category, summary: n.summary ?? null, symbols: n.symbols ?? [], provider: n.provider })
+      .values(rows.slice(i, i + NEWS_INSERT_BATCH))
       .onConflictDoNothing({ target: marketNews.url })
       .returning({ id: marketNews.id });
     inserted += r.length;

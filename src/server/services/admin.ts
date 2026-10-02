@@ -121,7 +121,9 @@ export const setActiveSchema = z.object({ isActive: z.boolean() });
 export async function setUserActive(admin: { id: string }, id: string, isActive: boolean, ip?: string | null) {
   const target = await getUser(id);
   if (target.id === admin.id && !isActive) throw badRequest("You cannot deactivate your own account");
-  if (!isActive && target.role === "admin" && (await activeAdminCount()) <= 1) throw badRequest("This is the last active administrator");
+  // `target.isActive` matters: deactivating somebody who is already inactive cannot reduce the number
+  // of active administrators, so refusing it is wrong. `deleteUserAsAdmin` already got this right.
+  if (!isActive && target.isActive && target.role === "admin" && (await activeAdminCount()) <= 1) throw badRequest("This is the last active administrator");
   if (target.isActive === isActive) return target;
   await db.update(users).set({ isActive, deactivatedAt: isActive ? null : new Date(), updatedAt: new Date() }).where(eq(users.id, id));
   // Deactivating ends the account's live sessions immediately; the data itself is untouched.
@@ -135,7 +137,9 @@ export const setRoleSchema = z.object({ role: z.enum(["admin", "user"]) });
 export async function setUserRole(admin: { id: string }, id: string, role: "admin" | "user", ip?: string | null) {
   const target = await getUser(id);
   if (target.id === admin.id && role !== "admin") throw badRequest("You cannot remove your own administrator role");
-  if (role === "user" && target.role === "admin" && (await activeAdminCount()) <= 1) throw badRequest("This is the last active administrator");
+  // Same reasoning as deactivation: demoting an administrator who cannot sign in anyway does not take
+  // the last *active* one away. Without `target.isActive` this refused a harmless tidy-up.
+  if (role === "user" && target.isActive && target.role === "admin" && (await activeAdminCount()) <= 1) throw badRequest("This is the last active administrator");
   if (target.role === role) return target;
   await db.update(users).set({ role, updatedAt: new Date() }).where(eq(users.id, id));
   await audit({ userId: admin.id, actor: "user", action: "admin.user.role", entityType: "user", entityId: id, metadata: { email: target.email, from: target.role, to: role }, ip });

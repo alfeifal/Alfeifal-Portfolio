@@ -28,7 +28,8 @@ import * as schema from "@/server/db/schema";
 import { aiUsage, conversations, marketQuotes, messages, priceAlerts, rateLimits, users } from "@/server/db/schema";
 import { rateLimit } from "@/server/security/rate-limit";
 import { checkRateLimit, purgeRateLimits } from "@/server/security/rate-limit-shared";
-import { GLOBAL_JOBS, JOB_FAILED, USER_JOBS, runMaintenance, activeUsers } from "@/server/services/maintenance";
+import { ALL_SCOPES, GLOBAL_JOBS, JOB_FAILED, SUPERSEDED, USER_JOBS, runMaintenance, activeUsers } from "@/server/services/maintenance";
+import * as market from "@/server/services/market";
 import { checkAlerts } from "@/server/services/market";
 import { purgeExpiredConversations } from "@/server/services/conversations";
 import { processRecurring } from "@/server/services/finance";
@@ -814,5 +815,101 @@ describe("the database module refuses a remote host from a process that is not t
       timeout: 60_000,
     });
     expect(JSON.parse(r.stdout.trim().split("\n").pop()!)).toEqual({ connected: true });
+  }, 60_000);
+});
+
+/**
+ * Phase 3.23 — the delivery pipeline itself.
+ *
+ * CI failed on 43 consecutive runs at `pnpm/action-setup`, before typecheck, lint, migrate, test or
+ * build ever started, because the workflow pinned a pnpm version that package.json also pins:
+ *
+ *   Error: Multiple versions of pnpm specified:
+ *     - version 10 in the GitHub Action config with the key "version"
+ *     - version pnpm@10.33.0 in the package.json with the key "packageManager"
+ *
+ * Nothing in the suite could have caught that, because the suite was never reached. These tests read
+ * the workflow as configuration and assert the shape that let it happen cannot come back.
+ */
+describe("the CI workflow is configured so it can actually run", () => {
+  const ci = () => readFileSync(".github/workflows/ci.yml", "utf8");
+
+  it("does not pin a pnpm version while package.json carries packageManager", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { packageManager?: string };
+    expect(pkg.packageManager, "package.json is the single source of truth for the pnpm version").toMatch(/^pnpm@/);
+    // The step must be bare: any `with:` carrying a version reintroduces the conflict.
+    const step = ci().split("\n").findIndex((l) => l.includes("pnpm/action-setup"));
+    expect(step).toBeGreaterThan(-1);
+    const next = ci().split("\n")[step + 1] ?? "";
+    expect(next).not.toMatch(/version\s*:/);
+    expect(ci()).not.toMatch(/pnpm\/action-setup@v\d\s*\n\s*with:\s*\{?\s*version/);
+  });
+
+  it("still runs the whole validation chain", () => {
+    for (const cmd of ["pnpm install --frozen-lockfile", "pnpm typecheck", "pnpm lint", "pnpm db:migrate", "pnpm test", "pnpm build"]) {
+      expect(ci(), cmd).toContain(cmd);
+    }
+  });
+
+  it("gives the token no more than read access, and bounds the job", () => {
+    expect(ci()).toMatch(/^permissions:\s*\n\s*contents:\s*read$/m);
+    expect(ci()).toMatch(/timeout-minutes:\s*\d+/);
+    expect(ci()).toMatch(/cancel-in-progress:\s*true/);
+  });
+
+  it("every workflow declares permissions and a timeout", () => {
+    for (const f of ["ci.yml", "backup.yml", "maintenance.yml"]) {
+      const y = readFileSync(`.github/workflows/${f}`, "utf8");
+      expect(y, `${f} permissions`).toMatch(/^permissions:/m);
+      expect(y, `${f} timeout`).toMatch(/timeout-minutes:\s*\d+/);
+    }
+  });
+
+  it("no workflow claims the jobs behind the cron are all idempotent", () => {
+    // They are not, until migration 0008 is applied: see BUG-007. The claim was in two places.
+    for (const f of ["maintenance.yml"]) {
+      expect(readFileSync(`.github/workflows/${f}`, "utf8")).not.toMatch(/[Ee]very job .{0,30}is\s+idempotent/);
+    }
+    expect(readFileSync("src/app/api/cron/route.ts", "utf8")).not.toMatch(/Every job is idempotent/);
+  });
+});
+
+describe("the daily pass does not do the news ingestion twice", () => {
+  it("newsForced supersedes news when both scopes are selected", () => {
+    const forced = GLOBAL_JOBS.find((j) => j.name === "newsForced")!;
+    expect(forced.supersedes).toBe("news");
+    expect(forced.scope).toBe("daily");
+    expect(GLOBAL_JOBS.find((j) => j.name === "news")!.scope).toBe("frequent");
+  });
+
+  it("the unscoped run reports news as superseded and fetches once", async () => {
+    const calls: boolean[] = [];
+    const spy = vi.spyOn(market, "refreshNews").mockImplementation(async (force?: boolean) => {
+      calls.push(Boolean(force));
+      return 0;
+    });
+    try {
+      const report = (await runMaintenance(ALL_SCOPES)) as Record<string, unknown>;
+      expect(report.news).toBe(SUPERSEDED);
+      expect(report.newsForced).not.toBe(JOB_FAILED);
+      expect(calls, "exactly one refresh, and it is the forced one").toEqual([true]);
+    } finally {
+      spy.mockRestore();
+    }
+  }, 60_000);
+
+  it("the frequent run on its own still refreshes the news", async () => {
+    const calls: boolean[] = [];
+    const spy = vi.spyOn(market, "refreshNews").mockImplementation(async (force?: boolean) => {
+      calls.push(Boolean(force));
+      return 0;
+    });
+    try {
+      const report = (await runMaintenance(["frequent"])) as Record<string, unknown>;
+      expect(report.news).not.toBe(SUPERSEDED);
+      expect(calls).toEqual([false]);
+    } finally {
+      spy.mockRestore();
+    }
   }, 60_000);
 });

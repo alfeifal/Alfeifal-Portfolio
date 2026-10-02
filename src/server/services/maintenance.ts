@@ -38,6 +38,15 @@ interface GlobalJob {
   name: string;
   scope: JobScope;
   run: () => Promise<unknown>;
+  /**
+   * Another job this one makes pointless when both are selected.
+   *
+   * The daily pass runs with no scope, so it selects every job — and `news` (which respects a
+   * 15-minute cache) ran immediately before `newsForced` (which ignores it), fetching all thirteen
+   * feeds and re-inserting the same items twice, back to back, for no benefit. Measured: that
+   * ingestion was most of the 56-58 seconds the daily pass took in production.
+   */
+  supersedes?: string;
 }
 interface UserJob {
   name: string;
@@ -53,7 +62,7 @@ export const GLOBAL_JOBS: readonly GlobalJob[] = [
   // `force: false` respects the provider's own 15-minute cache, so calling this every quarter of an
   // hour is mostly a no-op rather than 13 RSS fetches; the daily pass forces a real refresh.
   { name: "news", scope: "frequent", run: () => refreshNews(false) },
-  { name: "newsForced", scope: "daily", run: () => refreshNews(true) },
+  { name: "newsForced", scope: "daily", run: () => refreshNews(true), supersedes: "news" },
   // Expired rows are already rejected at read time, so purging them is housekeeping, not correctness.
   { name: "purgedSessions", scope: "daily", run: async () => { await purgeExpiredSessions(); return "ok"; } },
   // The shared limiter writes a counter row per bucket per window; only the last two windows are ever
@@ -89,6 +98,9 @@ export function activeUsers() {
  * response body, which a scheduler prints into its log. This value carries no payload at all.
  */
 export const JOB_FAILED = "failed" as const;
+
+/** What the report says for a job another selected job made redundant. Not a failure. */
+export const SUPERSEDED = "superseded" as const;
 
 /**
  * Records a job failure without carrying anything out of the exception.
@@ -128,8 +140,16 @@ export async function runMaintenance(scopes: readonly JobScope[]) {
   };
 
   const report: Record<string, unknown> = { scopes: [...wanted] };
-  for (const job of GLOBAL_JOBS) {
-    if (wanted.has(job.scope)) report[job.name] = await attempt(job.name, () => job.run());
+  const selected = GLOBAL_JOBS.filter((j) => wanted.has(j.scope));
+  // A job that supersedes another only does so when both were actually selected; running the
+  // frequent scope alone must still refresh the news.
+  const superseded = new Set(selected.map((j) => j.supersedes).filter((n): n is string => Boolean(n)));
+  for (const job of selected) {
+    if (superseded.has(job.name)) {
+      report[job.name] = SUPERSEDED;
+      continue;
+    }
+    report[job.name] = await attempt(job.name, () => job.run());
   }
 
   const jobs = USER_JOBS.filter((j) => wanted.has(j.scope));

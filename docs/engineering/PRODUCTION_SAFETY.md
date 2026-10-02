@@ -1,6 +1,6 @@
 # Production safety
 
-Last verified: 2026-10-02, against commit `642c421`.
+Last verified: 2026-10-02, against commit `a72c985` plus the phase 3.23 changes.
 
 Nothing in this file is written from a previous report. Every line was checked in the session that
 wrote it, and anything that could not be checked says so.
@@ -112,6 +112,76 @@ Restoration has been exercised against a disposable database, not against produc
 
 Neon's own instant-restore window is an additional safety net on paper; it has not been checked from
 here, because that needs the Neon console or API.
+
+## What is actually running, measured rather than assumed (phase 3.23)
+
+Established from production read-only queries and from the GitHub Actions API on 2026-10-02.
+
+### The Vercel daily cron works, and is the only thing that does
+
+`portfolio_snapshots` gets exactly one row per active account per day and is the **last** job in the
+sequence, so its presence proves the whole pass completed. There is a row for **every one of the
+eleven days** from 2026-09-21 (when the cron fix was deployed) to 2026-10-01 — no gaps.
+
+| | |
+|---|---|
+| Configured | `vercel.json`, `0 5 * * *` — daily, 05:00 UTC, no `?scope=`, so **every** job |
+| Actually fires | 05:53:40–05:53:42 UTC, every day. The ~54-minute lag is the documented Hobby per-hour precision (±59 min), not a fault |
+| Wall clock | 55.6 – 58.1 s, eleven days running |
+| Ceiling | **300 s** — Vercel Hobby default *and* maximum with fluid compute ([their docs](https://vercel.com/docs/functions/configuring-functions/duration), consulted 2026-10-02) |
+| Headroom | ~81%. An earlier suspicion that the flat ~56 s meant it was hitting a limit was **wrong**, and the limit it was measured against (60 s) was the wrong number |
+
+No `maxDuration` is declared anywhere in the repository, so the figure in force is Vercel's project
+default. That default is a dashboard setting nobody here can read, which is the one unverified part of
+the above.
+
+### The GitHub Actions frequent workflow has never once succeeded
+
+61 scheduled runs, **every one a failure**, all on the missing `APP_URL` variable and `CRON_SECRET`
+secret (SEC-003). Confirmed independently from the data rather than from the run list:
+`market_news.fetched_at` falls in the **05 hour and no other**, every day. Nothing has ever fetched
+news outside the Vercel window.
+
+Consequences, while this stands:
+
+- **Price alerts sample once a day, at 05:54 UTC** — before the European open and seven hours before
+  the US one. For a module whose purpose is to notice a threshold being crossed, that is close to
+  useless, and it is precisely what the workflow exists to fix.
+- **AI transcripts live up to 48 h against a stated 24 h TTL**, because the purge runs daily.
+  Currently moot: `ai_conversations` is empty.
+
+### Even working, the 15-minute cadence is fiction
+
+Sampled from the run list over 30 hours: 12 runs — 00:10, 20:35, 15:42, 08:46, 02:03, 23:04, 19:07,
+13:54, 07:18, 01:30, 22:34, 18:35 UTC. Roughly **one every two and a half hours, about 12%** of the
+96 a day the cron expression asks for. GitHub documents that scheduled jobs are delayed and dropped
+under load; the magnitude is the finding. BUG-006 is now quantified rather than suspected.
+
+This matters for the design premise. The workflow exists because alerts need sub-daily sampling, and
+this scheduler does not reliably deliver it even when its secrets are set. Setting them is still worth
+doing — a few times a day beats once — but "every 15 minutes" should not appear in any plan built on
+it.
+
+### Continuous integration had never run at all
+
+43 runs, all failed at `pnpm/action-setup`, before install, typecheck, lint, migrate, test or build.
+See BUG-010. Fixed in this phase; the first run that reaches the suite is the verification.
+
+## Local development database
+
+`tests/` needs a real PostgreSQL — there are no database mocks here on purpose, because concurrency,
+cascades and constraints are the things worth testing. Nothing in the repository used to say how to
+get one, so every session rediscovered it, and in one session the cluster had to be rebuilt twice.
+
+`.claude/hooks/session-start.sh` now does it: installs dependencies, installs PostgreSQL 16 if the
+image lacks it, initialises a trust-auth cluster at `/var/lib/postgresql/personal-os-test` listening
+on port 5433 through a socket in `/tmp`, creates `personal_os_test`, and applies the migrations. It
+reuses a server already answering on that socket, exits immediately outside Claude Code on the web,
+and is safe to run repeatedly.
+
+Validated by stopping the existing cluster and running it from nothing: dependencies installed,
+cluster initialised and started, database created, 9 migrations applied, then **904 tests passing** on
+the database it built. A second run reported the server already answering and changed nothing.
 
 ## Incident — an account was created in production by mistake (2026-09-23, resolved 2026-10-02)
 
@@ -243,5 +313,5 @@ connections and are unaffected — which is itself a gap, noted below.
 | `0008` not applied | The same; it applies after `0007` and BUG-007 stays live until it does |
 | `/api/admin/usage` returns 500 | `0007` |
 | Rate limiting is per-instance in production | `0007` |
-| GitHub Actions maintenance workflow failing | `APP_URL` variable and `CRON_SECRET` secret |
+| GitHub Actions maintenance workflow failing (61 runs, never once succeeded) | `APP_URL` variable and `CRON_SECRET` secret |
 | `CRON_SECRET` in Vercel unconfirmed | Access to Vercel's environment variables |
