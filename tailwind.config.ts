@@ -18,6 +18,8 @@ export default {
         positive: "rgb(var(--positive) / <alpha-value>)",
         negative: "rgb(var(--negative) / <alpha-value>)",
         warning: "rgb(var(--warning) / <alpha-value>)",
+        // Text-only companion to `warning`; see the comment on --warning-ink in globals.css.
+        "warning-ink": "rgb(var(--warning-ink) / <alpha-value>)",
         // German module palette (preserved from the original project)
         ink: "#1B1D24",
         paper: "#F6F6F3",

@@ -61,7 +61,7 @@ export default function FinancePage() {
   useEffect(() => { if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "tx") setTimeout(() => openTx(), 50); }, []);
   return (
     <div className="space-y-4">
-      <PageHeader title="Finance" subtitle="Accounts, income, expenses, budgets, recurring and savings." action={<><input type="month" className="field !w-auto !py-1.5 text-sm" value={month} onChange={(e) => setMonth(e.target.value)} /><button className="btn-primary" onClick={() => openTx()}>+ Transaction</button></>} />
+      <PageHeader title="Finance" subtitle="Accounts, income, expenses, budgets, recurring and savings." action={<><input type="month" aria-label="Month" className="field !w-auto !py-1.5 text-sm" value={month} onChange={(e) => setMonth(e.target.value)} /><button className="btn-primary" onClick={() => openTx()}>+ Transaction</button></>} />
       <Tabs value={tab} onChange={setTab} options={[{ value: "overview", label: "Overview" }, { value: "transactions", label: "Transactions" }, { value: "budgets", label: "Budgets" }, { value: "accounts", label: "Accounts" }, { value: "recurring", label: "Recurring" }, { value: "savings", label: "Savings" }]} />
       {summary.error && <ErrorBox error={summary.error} retry={summary.reload} />}
       {summary.loading && !s && <><SkeletonStats /><div className="mt-3 grid gap-3 md:grid-cols-2">{[0, 1].map((i) => <div key={i} className="card h-48 shimmer" />)}</div></>}

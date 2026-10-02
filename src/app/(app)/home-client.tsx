@@ -59,7 +59,7 @@ export default function HomeClient({ initial }: { initial: DashboardData }) {
       <StaggerItem>
         <form onSubmit={submitAsk} className="card flex items-center gap-2 p-1.5 pl-3 transition-[box-shadow,border-color] duration-150 focus-within:border-fg/30 focus-within:shadow-lg focus-within:shadow-black/5">
           <Sparkles size={16} className="shrink-0 muted" />
-          <input className="min-w-0 flex-1 bg-transparent py-2 text-[15px] outline-none placeholder:text-muted/70" placeholder={aiConfigured ? "Ask your Personal OS…" : "AI not configured — set ANTHROPIC_API_KEY"} value={ask} onChange={(e) => setAsk(e.target.value)} disabled={!aiConfigured} />
+          <input aria-label="Ask your Personal OS" className="min-w-0 flex-1 bg-transparent py-2 text-[15px] outline-none placeholder:text-muted/70" placeholder={aiConfigured ? "Ask your Personal OS…" : "AI not configured — set ANTHROPIC_API_KEY"} value={ask} onChange={(e) => setAsk(e.target.value)} disabled={!aiConfigured} />
           <button className="btn-primary btn-sm" disabled={!ask.trim() || !aiConfigured}>Ask</button>
         </form>
         <div className="mt-2 flex flex-wrap gap-1.5">

@@ -48,7 +48,7 @@ export function Stat({ label, value, sub, tone, href, count, format }: { label: 
   const inner = (
     <div className={cn("card p-3", href && "card-interactive")}>
       <p className="text-xs muted">{label}</p>
-      <p className={cn("text-xl font-semibold tnum tracking-tight", tone === "positive" && "text-positive", tone === "negative" && "text-negative", tone === "warning" && "text-warning")}>
+      <p className={cn("text-xl font-semibold tnum tracking-tight", tone === "positive" && "text-positive", tone === "negative" && "text-negative", tone === "warning" && "text-warning-ink")}>
         {count != null ? <AnimatedNumber value={count} format={format} /> : value}
       </p>
       {sub && <p className="text-xs muted">{sub}</p>}
@@ -103,7 +103,7 @@ export function Bar({ value, tone = "accent", h = 6 }: { value: number; tone?: "
   );
 }
 export function Badge({ children, tone = "muted", className }: { children: ReactNode; tone?: "muted" | "positive" | "negative" | "warning" | "accent"; className?: string }) {
-  return <span className={cn("pill", tone === "positive" && "bg-positive/15 text-positive", tone === "negative" && "bg-negative/15 text-negative", tone === "warning" && "bg-warning/15 text-warning", tone === "accent" && "bg-accent text-accent-fg", className)}>{children}</span>;
+  return <span className={cn("pill", tone === "positive" && "bg-positive/15 text-positive", tone === "negative" && "bg-negative/15 text-negative", tone === "warning" && "bg-warning/15 text-warning-ink", tone === "accent" && "bg-accent text-accent-fg", className)}>{children}</span>;
 }
 /** Provenance label (spec §34). */
 export function Source({ source }: { source: string | null | undefined }) {

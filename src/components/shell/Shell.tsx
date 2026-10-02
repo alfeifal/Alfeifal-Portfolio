@@ -76,7 +76,7 @@ export function Shell({ user, aiConfigured, children }: { user: ShellUser; aiCon
   };
 
   const sidebar = (compact: boolean) => (
-    <nav className="flex h-full flex-col">
+    <nav aria-label="Main" className="flex h-full flex-col">
       <div className={cn("mb-4 flex items-center px-2", compact ? "justify-center" : "justify-between")}>
         {!compact && <Link href="/" className="text-lg font-semibold tracking-tight">Personal<span className="muted">OS</span></Link>}
         <button className="hidden rounded-md p-1 muted transition-colors hover:bg-surface-2 hover:text-fg md:inline-flex" onClick={toggleCollapsed} aria-label={compact ? "Expand sidebar" : "Collapse sidebar"}>{compact ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}</button>
@@ -120,7 +120,7 @@ export function Shell({ user, aiConfigured, children }: { user: ShellUser; aiCon
                 </Link>
               </header>
               <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-24 pt-5 md:px-6 md:pb-10"><PageTransition id={pathname}>{children}</PageTransition></main>
-              <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/95 backdrop-blur safe-b md:hidden">
+              <nav aria-label="Primary, compact" className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/95 backdrop-blur safe-b md:hidden">
                 <div className="grid grid-cols-5">
                   {NAV.filter((n) => MOBILE_TABS.includes(n.href)).map((n) => { const a = active(n.href); return <Link key={n.href} href={n.href} className={cn("relative flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium transition-colors", a ? "text-fg" : "muted")}>{a && <m.span layoutId="mobile-active" className="absolute top-0 h-0.5 w-8 rounded-full bg-accent" transition={T.layout} />}<m.span whileTap={{ scale: 0.85 }} className="inline-flex"><n.icon size={20} strokeWidth={a ? 2.2 : 1.8} /></m.span>{n.label}</Link>; })}
                   <button onClick={() => setMenu(true)} className="flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium muted"><Menu size={20} strokeWidth={1.8} />More</button>

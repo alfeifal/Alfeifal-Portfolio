@@ -158,7 +158,7 @@ function Assistant() {
                 <span className="flex items-center gap-2.5 text-sm muted"><span className="flex items-center gap-0.5"><span className="dot" /><span className="dot" /><span className="dot" /></span>{STATUS[status]}</span>
               ) : <p className="text-sm muted">Done — see the actions below.</p>}
               {mm.tool && <p className="flex items-center gap-2 text-xs muted"><Loader2 size={13} className="animate-spin" />{mm.tool.replace(/_/g, " ")}…</p>}
-              {mm.interrupted && <p className="text-xs text-warning">The answer was interrupted — what you see above is what arrived.</p>}
+              {mm.interrupted && <p className="text-xs text-warning-ink">The answer was interrupted — what you see above is what arrived.</p>}
               {mm.role === "assistant" && <ActionList actions={mm.actions ?? []} pending={mm.pending ?? []} onChanged={(a) => invalidateModules(modulesOf([a]))} />}
               {mm.outcome === "partial" && <p className="text-xs text-negative">Some of those actions failed — only the ones marked with a check were saved.</p>}
               {mm.outcome === "failed" && <p className="text-xs text-negative">Nothing was saved: every action in this turn failed.</p>}
@@ -171,7 +171,7 @@ function Assistant() {
       <div className="sticky bottom-20 mt-3 md:bottom-4">
         <div className="mb-1.5 flex gap-1.5 overflow-x-auto pb-1">{QUICK.map((q) => <m.button key={q.label} whileTap={{ scale: 0.95 }} transition={T.state} onClick={() => prefill(q.text)} className="btn-subtle btn-sm shrink-0 !rounded-full bg-surface"><q.icon size={12} />{q.label}</m.button>)}</div>
         <form onSubmit={(e) => { e.preventDefault(); send(input); }} className="card flex items-end gap-2 p-2 shadow-lg shadow-black/5 transition-[border-color] focus-within:border-fg/30">
-          <textarea ref={inputRef} rows={2} className="field !border-0 !ring-0 resize-none !bg-transparent" placeholder="Talk to your Personal OS…" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }} disabled={!aiConfigured} />
+          <textarea ref={inputRef} aria-label="Message" rows={2} className="field !border-0 !ring-0 resize-none !bg-transparent" placeholder="Talk to your Personal OS…" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }} disabled={!aiConfigured} />
           <Button variant="primary" type="submit" loading={busy} disabled={!input.trim() || !aiConfigured}>Send</Button>
         </form>
       </div>

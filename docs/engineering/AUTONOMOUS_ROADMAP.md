@@ -7,7 +7,7 @@ external prerequisite is missing. Nothing is marked from a previous report.
 ## Current position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphase in progress:** 3.24 (UX / accessibility audit); 3.21, 3.22 and 3.23 complete
+- **Subphase in progress:** 3.25 (performance and scalability audit); 3.21–3.24 complete
 - **Commit:** see `SESSION_CHECKPOINT.md`
 
 ## Phase 3
@@ -30,8 +30,8 @@ external prerequisite is missing. Nothing is marked from a previous report.
 | **3.21** database integrity audit | COMPLETE in code, **dormant in production** | BUG-007: `tests/concurrency.test.ts` (6/7 fail unfixed, 11/11 pass fixed); migration `0008` unapplied |
 | **3.22** AI assistant & tool audit | COMPLETE | SEC-006 fixed and verified against a production build; SEC-007 mitigated with a stated caveat; `tests/ai-audit.test.ts` |
 | **3.23** cron / CI-CD / operations | COMPLETE | BUG-010/011/012 fixed; cadence and duration measured in production; `.claude/hooks/session-start.sh` added |
-| 3.24 UX / accessibility | **NEXT** | |
-| 3.25 performance & scalability | NOT STARTED | Earlier work in 3.9/3.11 |
+| **3.24** UX / accessibility | COMPLETE | BUG-014/015 fixed; axe-core over 25 routes in light, dark and phone width, zero violations; `scripts/a11y-audit.mjs` |
+| 3.25 performance & scalability | **NEXT** | Earlier work in 3.9/3.11; the suite's own duration and the six missing user_id indexes both land here |
 | 3.26 bug & debt remediation | ONGOING | Driven by `BUG_REGISTER.md` |
 | 3.27 full regression / release readiness | NOT STARTED | Cannot pass while production blockers stand |
 
@@ -60,7 +60,7 @@ An agent may not set secrets, so these will not clear themselves and are not ret
                                         └──> AI usage measurable ──> any future quota
                                         └──> 0008 ──> BUG-007 actually fixed in production
 SEC-003 (secrets) ──> frequent maintenance runs ──> BUG-006 re-measurable
-3.20 ──> 3.21 ──> 3.22 ──> 3.23 ──> 3.24 ──> 3.27
+3.20 ──> 3.21 ──> 3.22 ──> 3.23 ──> 3.24 ──> 3.25 ──> 3.27
 ```
 
 Everything below 3.24 is independent of the production blockers and can proceed. 3.21, 3.22 and 3.23

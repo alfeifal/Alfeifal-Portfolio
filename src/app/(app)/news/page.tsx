@@ -21,7 +21,7 @@ export default function NewsPage() {
   const explain = async (n: News) => { setAi((s) => ({ ...s, [n.id]: "loading" })); try { setAi((s) => ({ ...s, [n.id]: {} as never })); const r = await api<{ aiSummary: string; aiWhyItMatters: string }>("/api/ai/news-explain", { method: "POST", json: { id: n.id } }); setAi((s) => ({ ...s, [n.id]: r })); } catch (e) { setAi((s) => ({ ...s, [n.id]: { aiSummary: "Failed: " + (e as Error).message, aiWhyItMatters: "" } })); } };
   return (
     <div className="space-y-3">
-      <PageHeader title="Market News" subtitle="Aggregated from public RSS feeds (CNBC, MarketWatch, Fed, ECB, Investing.com, CoinDesk, Yahoo…). Headlines are verified external data; AI notes are interpretation." action={<><input className="field !w-48 !py-1.5 text-sm" placeholder="Search headlines" value={q} onChange={(e) => setQ(e.target.value)} /><button className="btn-ghost btn-sm" onClick={() => setRefresh((n) => n + 1)} disabled={news.loading}>Refresh feeds</button></>} />
+      <PageHeader title="Market News" subtitle="Aggregated from public RSS feeds (CNBC, MarketWatch, Fed, ECB, Investing.com, CoinDesk, Yahoo…). Headlines are verified external data; AI notes are interpretation." action={<><input aria-label="Search headlines" className="field !w-48 !py-1.5 text-sm" placeholder="Search headlines" value={q} onChange={(e) => setQ(e.target.value)} /><button className="btn-ghost btn-sm" onClick={() => setRefresh((n) => n + 1)} disabled={news.loading}>Refresh feeds</button></>} />
       <Tabs value={cat} onChange={setCat} options={CATS.map(([v, l]) => ({ value: v, label: l }))} />
       {news.error && <ErrorBox error={news.error} retry={news.reload} />}
       {news.loading && !news.data && <SkeletonList rows={8} />}

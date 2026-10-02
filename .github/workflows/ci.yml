@@ -17,13 +17,13 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Measured on the first run that ever got this far: install 5 s, typecheck 18 s, lint 18 s,
-    # migrate 2 s — and then the suite ran past 20 minutes, where this bound used to be, against 3.4
-    # minutes on a development machine. 38 test files run serially (`fileParallelism: false`) and most
-    # of the time is real database round trips. 45 minutes is a bound that still catches a hang
-    # without failing a healthy run; the suite's own duration is a separate concern, recorded in
-    # ARCHITECTURE_STATUS.md for the performance phase.
-    timeout-minutes: 45
+    # 20, not 45. The run before this bound was set took over 20 minutes in `pnpm test` and I read
+    # that as "the suite is simply slower on a CI runner" and loosened the bound. The very next run,
+    # on the same code, finished the whole job in 4m16s with the suite at 2m35s — so that run hung,
+    # and the inference was wrong. A bound should be proportionate to the observed time: 20 minutes
+    # is ~5x the measured job and will surface a repeat of that hang in minutes instead of an hour.
+    # The hang itself is recorded in BUG_REGISTER.md as a single unexplained occurrence.
+    timeout-minutes: 20
     services:
       postgres:
         # NOTE: production runs PostgreSQL 18.6. This is 16, which is also what the project's

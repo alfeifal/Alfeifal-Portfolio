@@ -76,7 +76,7 @@ export default function AnalyticsPage() {
                       <>
                         <p className="text-sm">Logged on {d.nutrition.coverage.daysLogged} of {d.nutrition.coverage.daysInRange} days ({share(d.nutrition.coverage.pct)}).</p>
                         <p className="mt-1 text-sm tnum">{fmtNum(d.nutrition.average.calories, 0)} kcal · P {fmtNum(d.nutrition.average.protein, 0)} · C {fmtNum(d.nutrition.average.carbs, 0)} · F {fmtNum(d.nutrition.average.fat, 0)} per logged day</p>
-                        {!d.nutrition.consistency.ok && <p className="mt-1 text-xs text-warning">The average macros imply {fmtNum(d.nutrition.consistency.macroCalories, 0)} kcal; some entries disagree with their own macros.</p>}
+                        {!d.nutrition.consistency.ok && <p className="mt-1 text-xs text-warning-ink">The average macros imply {fmtNum(d.nutrition.consistency.macroCalories, 0)} kcal; some entries disagree with their own macros.</p>}
                       </>
                     )}
                   </Card>

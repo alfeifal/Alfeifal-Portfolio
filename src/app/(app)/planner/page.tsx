@@ -62,7 +62,7 @@ export default function PlannerPage() {
       )}
       <Card title="AI planner">
         {!aiConfigured && <p className="mb-2 text-sm muted">AI not configured.</p>}
-        <textarea className="field" rows={2} placeholder="Constraints, e.g. “I work Mon–Fri 10–18, gym after work, German after dinner, exam Friday”" value={instructions} onChange={(e) => setInstructions(e.target.value)} />
+        <textarea aria-label="Constraints" className="field" rows={2} placeholder="Constraints, e.g. “I work Mon–Fri 10–18, gym after work, German after dinner, exam Friday”" value={instructions} onChange={(e) => setInstructions(e.target.value)} />
         <p className="mt-1.5 text-xs muted">The assistant always saves a draft: nothing reaches your calendar or tasks until you accept it.</p>
         <div className="mt-2 flex flex-wrap gap-2">
           <Button variant="primary" size="sm" loading={busy} disabled={!aiConfigured} onClick={() => run("today")}>Plan today</Button>

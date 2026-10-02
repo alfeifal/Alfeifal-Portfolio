@@ -121,6 +121,29 @@ anything, and this project does not add indexes on principle alone. It belongs t
 phase, with a concrete trigger: measure `EXPLAIN (ANALYZE)` on the per-user list query for each of
 the six at realistic row counts, and add the index where a sequential scan actually dominates.
 
+## Accessibility
+
+Measured in a real browser with axe-core 4.10.2 over 25 routes, not inferred from the source:
+`scripts/a11y-audit.mjs`. As of phase 3.24, **zero violations** at WCAG 2.0/2.1/2.2 A+AA plus axe's
+best-practice rules, in three configurations — light 1280×900, light 375×812, dark 1280×900 — with no
+horizontal overflow on any route at phone width.
+
+What the audit established beyond the violation count:
+
+- **`prefers-reduced-motion` is honoured.** Emulating it removed 18 apparent contrast failures that
+  were opacity frames of a list fading in. Previously this was assumed from media queries existing.
+- **Colour is tokenised and the tokens now encode the contrast.** `--muted` and `--warning-ink` clear
+  4.5:1 against `--surface`, `--surface-2` and `--bg` in both themes, and `tests/ux-coherence.test.ts`
+  computes the WCAG ratio from the declared values so a token edit cannot quietly drop below it.
+- **`--warning` and `--warning-ink` are deliberately different.** One is a fill, one is for words; the
+  fill does not meet text contrast and is not supposed to.
+- **Every route has `main`, `nav`, `header` and a single `h1`.** Heading depth is thin on about half of
+  them (an `h1` and nothing else), which axe does not flag and this file does not claim is ideal.
+
+The audit needs a browser, and the GitHub runner has none, so **CI does not cover this**. What CI
+covers is the source-level half: the contrast arithmetic on the tokens, the labelling rule and its
+inverse, and the list-child rule.
+
 ## Known architecture debt
 
 1. **The CSRF rule is implemented twice** (`proxy.ts` inline, `security/origin.ts` exported). Kept
@@ -135,13 +158,12 @@ the six at realistic row counts, and add the index where a sequential scan actua
    `0007` lands there is no history to justify a number.
 6. **`drizzle.config.ts` defaults to `DATABASE_URL`**, so any `drizzle-kit` command points at
    production unless told otherwise. This has already caused one accidental (harmless) attempt.
-7. **The suite takes over 20 minutes on a CI runner**, against 3.4 minutes locally. `vitest` is
-   configured with `fileParallelism: false` — necessary, because the tests share one database and
-   several assert on global counts — so 38 files run one after another, and most of the time is real
-   round trips rather than computation. The CI job's bound was raised to 45 minutes on that
-   measurement rather than tuned around. Making it faster means either a database per file or
-   accepting fewer real-database tests; neither is a change to make casually, and it belongs to the
-   performance phase.
+7. **One CI run hung in `pnpm test` for over 20 minutes**; the next run, on the same code, finished
+   the whole job in 4m16s with the suite at 2m35s. Unexplained, one occurrence, recorded as BUG-013.
+   `vitest` runs with `fileParallelism: false` — necessary, because the tests share one database and
+   several assert on global counts — and two suites spawn child processes via `npx tsx`, which is the
+   most likely place for a stall. The job bound is 20 minutes, proportionate to the 4-minute
+   measurement, so a repeat surfaces quickly rather than burning an hour.
 8. **CI runs PostgreSQL 16; production runs 18.6.** The local development database is 16 too. Nothing
    currently depends on the difference — migration `0008` needs 15+ and no further — but a feature
    available on one and not the other would pass CI and fail production, or the reverse. Aligning CI

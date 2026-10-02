@@ -11,7 +11,7 @@ export function Grammar() {
   const list = CONCEPTS.filter(c => !q || (c.name + c.nameEs + c.summary).toLowerCase().includes(q.toLowerCase()))
   return <div>
     <h1 className="h1 mb-1">Gramática</h1><p className="text-sm muted mb-3">{CONCEPTS.length} conceptos, ordenados como en el libro.</p>
-    <input className="field mb-4" placeholder="Buscar concepto (Akkusativ, dativo, weil…)" value={q} onChange={e => setQ(e.target.value)} />
+    <input aria-label="Buscar concepto" className="field mb-4" placeholder="Buscar concepto (Akkusativ, dativo, weil…)" value={q} onChange={e => setQ(e.target.value)} />
     <ul className="card divide-y divide-line dark:divide-white/10">{list.map(c => <li key={c.id}><Link to={`/gramatica/${c.id}`} className="flex items-center gap-3 px-4 py-3"><div className="min-w-0 flex-1"><p className="font-medium">{c.name} <span className="muted font-normal">· {c.nameEs}</span></p><p className="text-xs muted">U{unitById(c.unitId)?.number} · {c.summary}</p></div><Mastery level={s.mastery[c.id]?.level ?? 0} small /></Link></li>)}</ul>
   </div>
 }

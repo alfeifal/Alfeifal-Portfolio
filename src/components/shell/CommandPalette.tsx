@@ -85,7 +85,7 @@ export function CommandPalette({ open, onClose, onQuick }: { open: boolean; onCl
           <m.div role="dialog" aria-label="Command palette" className="relative w-full max-w-xl overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl shadow-black/25" variants={{ hidden: { opacity: 0, scale: 0.97, y: -6 }, visible: { opacity: 1, scale: 1, y: 0 } }} transition={{ ...T.enter, duration: 0.18 }}>
             <div className="flex items-center gap-2 border-b border-border px-3">
               <SearchIcon size={16} className="muted" />
-              <input ref={inputRef} className="flex-1 bg-transparent py-3 text-[15px] outline-none placeholder:text-muted/70" placeholder="Search, jump to a module, create, or ask…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} />
+              <input aria-label="Search" ref={inputRef} className="flex-1 bg-transparent py-3 text-[15px] outline-none placeholder:text-muted/70" placeholder="Search, jump to a module, create, or ask…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} />
               {busy && <span className="text-xs muted">…</span>}
               <kbd className="rounded border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] muted">esc</kbd>
             </div>

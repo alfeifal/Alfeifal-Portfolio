@@ -8,12 +8,19 @@
   --surface-2: 241 241 238;
   --border: 226 226 221;
   --fg: 24 24 27;
-  --muted: 107 111 123;
+  /* 101 105 116 (#656974), not #6b6f7b: the old value measured 4.43:1 against --surface-2, which is
+     under the 4.5:1 AA threshold for normal text, and the ⌘K hint in the header is 10px. This is
+     4.85:1 on the same background and higher on --surface and --bg. */
+  --muted: 101 105 116;
   --accent: 30 41 59;
   --accent-fg: 255 255 255;
   --positive: 22 128 84;
   --negative: 190 52 40;
   --warning: 196 128 20;
+  /* --warning is the fill colour and stays that amber; as *text* it measured 3.25:1 on white, so
+     text uses this instead (5.24:1). Keeping them separate means a tinted badge still looks like a
+     badge while the words in it are readable. */
+  --warning-ink: 138 90 0;
   color-scheme: light;
 }
 .dark {
@@ -28,6 +35,8 @@
   --positive: 52 190 128;
   --negative: 235 96 80;
   --warning: 230 170 60;
+  /* On a dark surface the amber is already the light end of the pair, so text keeps it. */
+  --warning-ink: 230 170 60;
   color-scheme: dark;
 }
 html { -webkit-text-size-adjust: 100%; height: 100%; }
@@ -57,6 +66,10 @@ body { @apply bg-bg text-fg antialiased; min-height: 100%; font-feature-settings
 .h2 { @apply text-[15px] font-semibold tracking-tight; }
 .muted { @apply text-muted; }
 .link { @apply underline decoration-muted/50 underline-offset-2 transition-colors hover:decoration-fg; }
+/* An inline control that still has to be a real target. WCAG 2.2 SC 2.5.8 wants 24x24 CSS px, and axe
+   measured two of the routine editor's inline buttons at 36x16 and 25.3x16 with 13.6px of safe
+   clickable space. Padding alone does not grow an inline box's hit area, hence inline-block. */
+.link-tap { @apply link inline-block min-h-6 px-1 py-1 align-middle; }
 .prose-sm p { @apply mb-2 leading-relaxed; }
 .prose-sm ul { @apply mb-2 ml-4 list-disc space-y-1; }
 .prose-sm ol { @apply mb-2 ml-4 list-decimal space-y-1; }
@@ -86,7 +99,7 @@ body { @apply bg-bg text-fg antialiased; min-height: 100%; font-feature-settings
 .dark .german-app .card { background: #1D2028; border-color: #2A2E38; }
 .german-app .sub { @apply rounded-xl border border-line bg-paper; }
 .dark .german-app .sub { background: #1D2028; border-color: #2A2E38; }
-.german-app .muted { @apply text-[#6B6F7B]; }
+.german-app .muted { @apply text-[#656974]; } /* same 4.5:1 correction as --muted */
 .dark .german-app .muted { color: #9BA0AE; }
 .german-app .pill { @apply inline-flex items-center gap-1 rounded-full bg-[#ECEDE8] px-2.5 py-0.5 text-xs font-medium text-ink; }
 .dark .german-app .pill { background: #262A34; color: #ECEDE8; }

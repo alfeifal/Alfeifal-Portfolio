@@ -315,6 +315,99 @@ calls it exactly once, with `force: true`. Two fail against the unfixed registry
 
 ---
 
+## BUG-013 — one CI run hung in the test step for over twenty minutes
+
+**Severity:** MEDIUM · **Status:** open, one unexplained occurrence, bounded
+
+Run 44 reached `pnpm test` and was still in it past 20 minutes. Run 45, on code differing only by a
+timeout value and documentation, finished the whole job in **4m16s** with the suite at **2m35s**.
+
+**This corrects a conclusion I drew too fast.** From run 44 alone I concluded "the suite is simply
+slower on a CI runner than locally" and raised the job bound to 45 minutes. The next run disproved
+that: it hung. The bound is back to 20 minutes — roughly five times the measured job — so a repeat
+surfaces in minutes rather than after an hour.
+
+**Where to look if it recurs.** `vitest` runs with `fileParallelism: false`, and two suites spawn
+child processes with `npx tsx` (the multi-process rate-limit test and the database-guard tests). A
+stalled child that never exits would look exactly like this. Nothing is being changed on one
+occurrence; this entry exists so the second one is recognised instead of re-diagnosed.
+
+---
+
+## BUG-014 — five classes of accessibility defect across every route
+
+**Severity:** MEDIUM (one class critical by axe's scale) · **Status:** fixed, verified in a browser
+
+Found by running axe-core 4.10.2 against a production build in a real Chromium, over 25 routes —
+`scripts/a11y-audit.mjs`, written for this and committed. Before:
+
+| Rule | axe impact | Nodes | Routes | What it was |
+|---|---|---|---|---|
+| `color-contrast` | serious | 26 | 25 | `--muted` at 4.43:1 on `--surface-2` (the ⌘K hint, 10px) and `--warning` used as text at 3.25:1 |
+| `label` | **critical** | 3 | 3 | `type="date"` / `type="month"` fields with no name |
+| `select-name` | **critical** | 2 | 2 | the calendar view and memory-kind selects |
+| `list` | serious | 2 | 2 | an empty-state `<p>` written *inside* its `<ul>` |
+| `landmark-unique` | moderate | 1 | 1 | two unnamed `<nav>` landmarks |
+
+Plus, once WCAG 2.2 rules were included — which the first pass omitted, so `target-size` never ran —
+2 nodes of `target-size`: inline routine-editor buttons at 36×16 and 25.3×16 with 13.6px of safe
+clickable space against a required 24.
+
+**Fixes.** `--muted` 107 111 123 → 101 105 116 (4.43 → 4.85:1), which clears 25 of the 26 contrast
+nodes at a stroke because the offending element is in the shared header. A new `--warning-ink` token
+carries warning *text* at 5.24:1 while `--warning` stays the fill colour it was chosen to be. Seven
+`aria-label`s, two empty states moved out of their lists, two named navigation landmarks, and a
+`.link-tap` utility giving the inline routine controls a 24px target.
+
+**Verified after the fix, same instrument, 25 routes in three configurations:**
+
+| | Routes | Violations | Horizontal overflow |
+|---|---|---|---|
+| Light, 1280×900 | 25 | **0** | none |
+| Light, 375×812 | 25 | **0** | none |
+| Dark, 1280×900 | 25 (theme confirmed applied on all 25) | **0** | none |
+
+Rule set: WCAG 2.0, 2.1 and 2.2 at A and AA, plus axe's best-practice rules.
+
+### Two measurement mistakes worth recording, because both nearly became false findings
+
+**Animation frames read as contrast failures.** The first pass reported 18 contrast violations on
+`/news` — the same `<span>` at `#e7e7e9`, `#d9d9d9`, `#b0b2b9`, `#9497a0`, `#848791`, `#797d88`. Those
+are opacity steps of one element fading in, not six defects. Emulating `prefers-reduced-motion:
+reduce` removed all of them, which also **verified that the app honours reduced motion** — a property
+previously assumed from the presence of media queries in three files. (Worth knowing separately: for
+a viewer who does *not* set that preference, the staggered list entrance passes through contrast as
+low as 1.23:1. WCAG measures the settled state, so it is not a violation.)
+
+**My own target-size heuristic over-reported by 99×.** It counted every focusable under 24px: 198 on
+`/training/routine`, 120 on `/news`. axe's `target-size` rule, which implements the WCAG 2.2
+exceptions for inline targets, found **2**. The script keeps the heuristic as a hint and says in its
+own header not to trust it.
+
+---
+
+## BUG-015 — an `aria-label` was added to fields a visible label already named
+
+**Severity:** LOW · **Status:** fixed within the same phase, before it shipped
+
+While closing BUG-014 I swept every `<input>`/`<textarea>` with a placeholder and gave each one an
+`aria-label` derived from that placeholder. That produced names like `"a"` (from `placeholder="a, b"`),
+`"1H"`, `"min"` and `"For breakfast I had 3 eggs"` — and, on eight fields, a second name for a control
+that `<Field label="Tags">` already named.
+
+Both halves are harmful. A label of `"a"` is noise read aloud in place of a usable name, and
+`aria-label` **overrides** the visible label, so the words on screen and the words announced can
+diverge silently. Eight redundant labels were removed and ten noise labels replaced with names that
+say what the field is.
+
+The test that caught it had the same flaw — it demanded `aria-label` and did not accept a labelled
+wrapper, which is what prompted the bad sweep in the first place. It now asserts the real rule, *and*
+its inverse: no control may carry both a wrapper label and an `aria-label`. Containment is checked by
+finding the nearest unclosed labelled opener, not by a fixed look-back, because the shared prompt's
+`<Field>` opens further back than any window I guessed.
+
+---
+
 ## Conventions
 
 - A bug is only recorded once reproduced.

@@ -18,11 +18,11 @@ export function Vocab() {
   const list = useMemo(() => VOCAB.filter(v => (unit === 'all' ? isUnlocked(s, v.unitId) : v.unitId === unit) && (cat === 'all' || v.category === cat) && (lvl === 'all' || vocabLevel(s.vocab[v.id]) === Number(lvl)) && (!q || (v.de + ' ' + v.es + ' ' + (v.article ?? '')).toLowerCase().includes(q.toLowerCase()))), [q, unit, cat, lvl, s.vocab, s.lessons, s.settings.unlockAll])
   return <div>
     <h1 className="h1 mb-1">Vocabulario</h1><p className="text-sm muted mb-3">{VOCAB.length} palabras del curso, siempre con artículo y plural.</p>
-    <input className="field mb-2" placeholder="Buscar en alemán o español" value={q} onChange={e => setQ(e.target.value)} />
+    <input aria-label="Buscar" className="field mb-2" placeholder="Buscar en alemán o español" value={q} onChange={e => setQ(e.target.value)} />
     <div className="mb-3 grid grid-cols-3 gap-2 text-sm">
-      <select className="field !py-2" value={unit} onChange={e => setUnit(e.target.value)}><option value="all">Unidades desbloqueadas</option>{UNITS.map(u => <option key={u.id} value={u.id}>U{u.number} {u.title}</option>)}</select>
-      <select className="field !py-2" value={cat} onChange={e => setCat(e.target.value)}><option value="all">Todas las categorías</option>{cats.map(c => <option key={c}>{c}</option>)}</select>
-      <select className="field !py-2" value={lvl} onChange={e => setLvl(e.target.value)}><option value="all">Todos los niveles</option><option value="0">🔴 No aprendido</option><option value="1">🟠 En progreso</option><option value="2">🟡 Familiarizado</option><option value="3">🟢 Dominado</option><option value="4">🔵 Mastered</option></select>
+      <select aria-label="Unit" className="field !py-2" value={unit} onChange={e => setUnit(e.target.value)}><option value="all">Unidades desbloqueadas</option>{UNITS.map(u => <option key={u.id} value={u.id}>U{u.number} {u.title}</option>)}</select>
+      <select aria-label="Category" className="field !py-2" value={cat} onChange={e => setCat(e.target.value)}><option value="all">Todas las categorías</option>{cats.map(c => <option key={c}>{c}</option>)}</select>
+      <select aria-label="Level" className="field !py-2" value={lvl} onChange={e => setLvl(e.target.value)}><option value="all">Todos los niveles</option><option value="0">🔴 No aprendido</option><option value="1">🟠 En progreso</option><option value="2">🟡 Familiarizado</option><option value="3">🟢 Dominado</option><option value="4">🔵 Mastered</option></select>
     </div>
     <div className="mb-3 flex gap-1.5 overflow-x-auto">{([['list', 'Lista'], ['cards', 'Tarjetas'], ['quiz', 'Quiz'], ['spell', 'Escribir']] as const).map(([k, l]) => <button key={k} className={`tab border border-line ${mode === k ? 'tab-active' : ''}`} onClick={() => setMode(k)}>{l}</button>)}</div>
     {list.length === 0 && <p className="card p-4 text-sm muted">Sin resultados con estos filtros.</p>}

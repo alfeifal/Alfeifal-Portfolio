@@ -28,6 +28,28 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 const uiFiles = [...walk(join(ROOT, "src/app")), ...walk(join(ROOT, "src/components"))]
   .filter((p) => p.endsWith(".tsx") && !p.includes("/modules/german/"));
 
+/** Every component source, read once: several checks below sweep the whole surface. */
+const sources = (() => {
+  let cache: [string, string][] | null = null;
+  return () => (cache ??= uiFiles.map((f) => [relative(ROOT, f), readFileSync(f, "utf8")] as [string, string]));
+})();
+
+/**
+ * Is this element inside a `<Field label=…>` or a `<label>` that names it?
+ *
+ * Containment, not proximity: a fixed look-back window got this wrong for the shared prompt, whose
+ * `<Field>` opens well over 260 characters before the input it wraps. This finds the nearest preceding
+ * labelled opener and only accepts it if nothing closed in between.
+ */
+const namedByWrapper = (src: string, at: number) => {
+  const before = src.slice(0, at);
+  const opener = Math.max(before.lastIndexOf("<Field label="), before.lastIndexOf("<Field\n"), before.lastIndexOf("<label"));
+  if (opener === -1) return false;
+  const between = before.slice(opener);
+  if (/<\/Field>|<\/label>/.test(between)) return false;
+  return /^<Field\s+label=|^<label/.test(between);
+};
+
 describe("no module falls back to a browser dialog", () => {
   it("nothing calls window.prompt", () => {
     const offenders = uiFiles.filter((p) => /(?<![.\w])prompt\s*\(/.test(readFileSync(p, "utf8").replace(/placeholder=/g, "")));
@@ -217,5 +239,145 @@ describe("settings shows the account itself", () => {
     expect(settings).toContain("Only an administrator can create or disable accounts");
     // The admin link only renders for an admin.
     expect(settings).toMatch(/d\.role === "admin"[\s\S]{0,200}href="\/admin"/);
+  });
+});
+
+/**
+ * Phase 3.24 — what the accessibility audit fixed, pinned where a test can see it.
+ *
+ * The audit itself is `scripts/a11y-audit.mjs`: it needs a browser and a running build, so it cannot
+ * live here. These tests guard the parts of its findings that are visible in the source — the colour
+ * tokens it measured, and the attributes it found missing — so a regression shows up in CI, where the
+ * audit cannot run. They are not a substitute for re-running the audit; the audit is what measures.
+ */
+describe("the contrast the audit measured is the contrast the tokens encode", () => {
+  const css = () => readFileSync("src/app/globals.css", "utf8");
+
+  /** WCAG relative luminance and contrast ratio, from the spec. */
+  const lum = (r: number, g: number, b: number) => {
+    const c = [r, g, b].map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  const ratio = (a: [number, number, number], b: [number, number, number]) => {
+    const [hi, lo] = [lum(...a), lum(...b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const token = (name: string, block: "light" | "dark") => {
+    const text = css();
+    const start = block === "light" ? text.indexOf(":root {") : text.indexOf(".dark {");
+    const slice = text.slice(start, text.indexOf("}", start));
+    const m = slice.match(new RegExp(`--${name}:\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)`));
+    if (!m) throw new Error(`token --${name} not found in the ${block} block`);
+    return [Number(m[1]), Number(m[2]), Number(m[3])] as [number, number, number];
+  };
+
+  it("muted text clears 4.5:1 on every light surface it sits on", () => {
+    // The ⌘K hint in the header is 10px muted text on --surface-2, which is the tightest pairing.
+    // It measured 4.43 before this phase; axe flagged it on all 25 routes.
+    const muted = token("muted", "light");
+    for (const bg of ["surface", "surface-2", "bg"] as const) {
+      expect(ratio(muted, token(bg, "light")), `--muted on --${bg}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("warning text clears 4.5:1 while the fill colour stays the fill colour", () => {
+    // 3.25:1 before: --warning is an amber chosen to work as a tinted background, and it was also
+    // being used for words. --warning-ink is the text companion; --warning itself did not change.
+    expect(ratio(token("warning-ink", "light"), token("surface", "light"))).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(token("warning", "light"), token("surface", "light"))).toBeLessThan(4.5); // unchanged, on purpose
+  });
+
+  it("muted and warning text clear 4.5:1 in dark mode too", () => {
+    for (const name of ["muted", "warning-ink"] as const) {
+      for (const bg of ["surface", "surface-2", "bg"] as const) {
+        expect(ratio(token(name, "dark"), token(bg, "dark")), `--${name} on --${bg} (dark)`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("nothing paints words with the raw warning fill any more", () => {
+    const offenders = sources().filter(([, src]) => /\btext-warning\b(?!-ink)/.test(src));
+    expect(offenders.map(([f]) => f)).toEqual([]);
+  });
+
+  it("the German scope does not re-introduce the old muted colour", () => {
+    // Values only: the comment above --muted names the old colour on purpose.
+    const withoutComments = css().replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(withoutComments).not.toMatch(/#6B6F7B/i);
+  });
+});
+
+describe("controls the audit found nameless now have names", () => {
+  const named = (file: string, needle: string) => {
+    const src = readFileSync(file, "utf8");
+    const i = src.indexOf(needle);
+    expect(i, `${needle} not found in ${file}`).toBeGreaterThan(-1);
+    // The attribute has to be on the element itself, not merely somewhere in the file.
+    const tagStart = src.lastIndexOf("<", i);
+    const tag = src.slice(tagStart, src.indexOf(">", i) + 1);
+    expect(tag, `${file}: ${needle}`).toMatch(/aria-label=/);
+  };
+
+  it("every date and month field the audit flagged has an accessible name", () => {
+    named("src/app/(app)/finance/page.tsx", 'type="month"');
+    named("src/app/(app)/nutrition/page.tsx", 'type="date" aria-label');
+    named("src/app/(app)/training/page.tsx", 'type="date" aria-label');
+  });
+
+  it("every select the audit flagged has an accessible name", () => {
+    named("src/app/(app)/calendar/page.tsx", 'value={view}');
+    named("src/app/(app)/settings/page.tsx", 'value={mem.kind}');
+  });
+
+  it("the two navigation landmarks are distinguishable", () => {
+    const shell = readFileSync("src/components/shell/Shell.tsx", "utf8");
+    const labels = [...shell.matchAll(/<nav aria-label="([^"]+)"/g)].map((m) => m[1]);
+    expect(labels.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(labels).size).toBe(labels.length); // landmark-unique
+  });
+
+  it("no placeholder is an element's only accessible name", () => {
+    /*
+     * A placeholder disappears on the first keystroke, so it is not a label. But a name can come from
+     * more than one place, and this test's first version only accepted `aria-label` — which led me to
+     * bolt one onto fields that a wrapping `<Field label="Tags">` already named. That is worse than
+     * doing nothing: `aria-label` *overrides* the visible label for assistive technology, so the two
+     * can silently diverge. The rule is "has a name from some source", and a labelled wrapper counts.
+     */
+    const offenders: string[] = [];
+    for (const [file, src] of sources()) {
+      for (const m of src.matchAll(/<(input|textarea)\b[^>]*>/g)) {
+        if (!/placeholder=/.test(m[0])) continue;
+        const own = /aria-label|aria-labelledby/.test(m[0]);
+        if (!own && !namedByWrapper(src, m.index!)) offenders.push(`${file}: ${m[0].replace(/\s+/g, " ").slice(0, 100)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("a field named by a wrapping Field does not also carry an aria-label", () => {
+    // The override above, caught the other way round: two names for one control is a divergence
+    // waiting to happen, and the one assistive technology reads is not the one on screen.
+    const doubled: string[] = [];
+    for (const [file, src] of sources()) {
+      for (const m of src.matchAll(/<(input|textarea)\b[^>]*aria-label=[^>]*>/g)) {
+        if (namedByWrapper(src, m.index!)) {
+          doubled.push(`${file}: ${m[0].replace(/\s+/g, " ").slice(0, 100)}`);
+        }
+      }
+    }
+    expect(doubled).toEqual([]);
+  });
+});
+
+describe("a list only contains list items", () => {
+  it("no <ul> renders a bare <p> as a child", () => {
+    // Two empty states were written inside their list, which made the list stop being a list.
+    for (const [file, src] of sources()) {
+      for (const m of src.matchAll(/<ul\b[^>]*>/g)) {
+        const tail = src.slice(m.index! + m[0].length, m.index! + m[0].length + 400);
+        expect(/^\s*(\{[^<]*)?<p\b/.test(tail), `${file}: ${m[0]}`).toBe(false);
+      }
+    }
   });
 });

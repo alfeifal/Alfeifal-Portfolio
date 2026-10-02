@@ -52,7 +52,7 @@ export default function StudiesPage() {
           <div className="grid gap-3 md:grid-cols-2">
             <Card title="This week">
               <p className="text-2xl font-semibold tnum">{week.data.totalMinutes} min</p>
-              <ul className="mt-2 space-y-2">{week.data.bySubject.map((s) => <li key={s.name}><div className="flex justify-between text-sm"><span>{s.name} <span className="muted">· {s.sessions} sessions · {s.days} days</span></span><span className="tnum">{s.minutes}{s.weeklyGoalMinutes ? ` / ${s.weeklyGoalMinutes}` : ""} min</span></div>{s.weeklyGoalMinutes ? <Bar value={s.minutes / s.weeklyGoalMinutes} tone="positive" h={4} /> : null}</li>)}{week.data.bySubject.length === 0 && <p className="text-sm muted">No sessions this week yet — log one and it counts towards the subject&apos;s weekly goal.</p>}</ul>
+              {week.data.bySubject.length === 0 ? <p className="mt-2 text-sm muted">No sessions this week yet — log one and it counts towards the subject&apos;s weekly goal.</p> : <ul className="mt-2 space-y-2">{week.data.bySubject.map((s) => <li key={s.name}><div className="flex justify-between text-sm"><span>{s.name} <span className="muted">· {s.sessions} sessions · {s.days} days</span></span><span className="tnum">{s.minutes}{s.weeklyGoalMinutes ? ` / ${s.weeklyGoalMinutes}` : ""} min</span></div>{s.weeklyGoalMinutes ? <Bar value={s.minutes / s.weeklyGoalMinutes} tone="positive" h={4} /> : null}</li>)}</ul>}
             </Card>
             <Card title="Last 28 days · minutes per day"><MiniBars series={progress.data.daily.map((d) => ({ label: d.date.slice(5), a: d.minutes }))} labels={["minutes"]} /></Card>
           </div>

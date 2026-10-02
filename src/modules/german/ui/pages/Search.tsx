@@ -16,7 +16,7 @@ export function Search() {
   }, [q])
   return <div>
     <h1 className="h1 mb-3">Buscar</h1>
-    <input autoFocus className="field mb-4" placeholder="Palabra, regla, concepto… (p. ej. «dativo», «Akkusativ», «weil», «Tisch»)" value={q} onChange={e => setQ(e.target.value)} />
+    <input aria-label="Palabra" autoFocus className="field mb-4" placeholder="Palabra, regla, concepto… (p. ej. «dativo», «Akkusativ», «weil», «Tisch»)" value={q} onChange={e => setQ(e.target.value)} />
     {!r && <p className="text-sm muted">Escribe al menos 2 letras.</p>}
     {r && <div className="space-y-4">
       {r.concepts.length > 0 && <div><p className="text-sm font-semibold mb-1">Gramática</p><ul className="card divide-y divide-line dark:divide-white/10">{r.concepts.map(c => <li key={c.id}><Link to={`/gramatica/${c.id}`} className="block px-4 py-2.5"><p className="font-medium">{c.name} <span className="muted font-normal">· {c.nameEs}</span></p><p className="text-xs muted">{c.summary}</p></Link></li>)}</ul></div>}

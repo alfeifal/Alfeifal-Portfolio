@@ -44,7 +44,7 @@ export default function TrainingPage() {
   const rules = (d?.plan.rules ?? {}) as { progression?: string; rest?: string; intensityLegend?: string };
   return (
     <div className="space-y-4">
-      <PageHeader title="Training" subtitle={d ? `${d.plan.name} · cycle day ${d.dayIndex + 1}/${d.plan.cycleLength}` : "Your routine"} action={<><button className="btn-ghost btn-sm" onClick={() => setDate(addDays(date, -1))}>←</button><input type="date" className="field !w-auto !py-1.5 text-sm" value={date} onChange={(e) => setDate(e.target.value)} /><button className="btn-ghost btn-sm" onClick={() => setDate(addDays(date, 1))}>→</button><Link href="/training/routine" className="btn-ghost btn-sm">Routine</Link></>} />
+      <PageHeader title="Training" subtitle={d ? `${d.plan.name} · cycle day ${d.dayIndex + 1}/${d.plan.cycleLength}` : "Your routine"} action={<><button className="btn-ghost btn-sm" onClick={() => setDate(addDays(date, -1))}>←</button><input type="date" aria-label="Date" className="field !w-auto !py-1.5 text-sm" value={date} onChange={(e) => setDate(e.target.value)} /><button className="btn-ghost btn-sm" onClick={() => setDate(addDays(date, 1))}>→</button><Link href="/training/routine" className="btn-ghost btn-sm">Routine</Link></>} />
       {today.error && <ErrorBox error={today.error} retry={today.reload} />}
       {today.loading && !d && <SkeletonCards n={2} />}
       <AnimatePresence>{pr && <m.div key="pr" initial={{ opacity: 0, y: -6, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, height: 0 }} transition={T.enter} className="card border-positive/40 bg-positive/10 p-3 text-sm">🏆 {pr} <button className="link ml-2" onClick={() => setPr(null)}>ok</button></m.div>}</AnimatePresence>

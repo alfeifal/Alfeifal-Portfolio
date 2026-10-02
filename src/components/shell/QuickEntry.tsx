@@ -76,7 +76,7 @@ export function QuickEntry({ open, onClose }: { open: boolean; onClose: () => vo
     <Modal open={open} onClose={close} title={<span className="inline-flex items-center gap-2"><Sparkles size={16} />Quick entry</span>}>
       {!aiConfigured && <p className="mb-3 rounded-xl bg-warning/10 p-3 text-sm">The AI is not configured (ANTHROPIC_API_KEY). You can still add records manually in each module.</p>}
       <form onSubmit={submit}>
-        <textarea className="field" rows={3} autoFocus placeholder="Say what happened…" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }} />
+        <textarea aria-label="What happened" className="field" rows={3} autoFocus placeholder="Say what happened…" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }} />
         <div className="mt-2 flex flex-wrap gap-1.5">{EXAMPLES.map((x) => <button type="button" key={x} className="pill transition-colors hover:bg-border" onClick={() => setText(x)}>{x}</button>)}</div>
         <div className="mt-3 flex justify-end"><Button variant="primary" type="submit" loading={busy} loadingText="Saving" disabled={!text.trim() || !aiConfigured}>Save</Button></div>
       </form>
