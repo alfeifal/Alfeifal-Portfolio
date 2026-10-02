@@ -23,7 +23,7 @@ import { promisify } from "node:util";
 import { readFileSync, writeFileSync } from "node:fs";
 import { and, eq, sql } from "drizzle-orm";
 import { createTestUser, deleteTestUser } from "./helpers";
-import { db } from "@/server/db";
+import { db, pool } from "@/server/db";
 import * as schema from "@/server/db/schema";
 import { aiUsage, conversations, marketQuotes, messages, priceAlerts, rateLimits, users } from "@/server/db/schema";
 import { rateLimit } from "@/server/security/rate-limit";
@@ -911,5 +911,94 @@ describe("the daily pass does not do the news ingestion twice", () => {
     } finally {
       spy.mockRestore();
     }
+  }, 60_000);
+});
+
+/**
+ * Phase 3.25 — the news ingestion BUG-012 rewrote.
+ *
+ * BUG-012 turned up to 400 single-row INSERTs into one statement per 200 rows, after deduplicating by
+ * URL in JavaScript. Both halves can be wrong in ways a count would not notice: a batch that drops
+ * rows, or a batch that fails outright because two feeds carried the same story and the arbiter index
+ * cannot resolve a conflict against a row the same statement is still inserting. These tests feed it
+ * exactly those cases through a stubbed provider, so no network is involved.
+ */
+describe("the batched news ingestion is correct, not just fewer statements", () => {
+  const market = () => import("@/server/services/market");
+  const provider = () => import("@/server/market");
+
+  let spy: { mockRestore: () => void } | null = null;
+  afterEach(async () => {
+    spy?.mockRestore();
+    spy = null;
+    const { marketNews } = await import("@/server/db/schema");
+    await db.delete(marketNews).where(sql`${marketNews.url} like 'https://stub.test/%'`);
+  });
+
+  const ingest = async (items: { headline: string; url: string }[]) => {
+    const prov = await provider();
+    spy = vi.spyOn(prov, "newsProvider").mockReturnValue({
+      getNews: async () => items.map((i) => ({
+        headline: i.headline, source: "Stub", url: i.url, publishedAt: new Date(),
+        category: "global", summary: null, symbols: [], provider: "stub",
+      })),
+    } as never);
+    const m = await market();
+    return m.refreshNews(true);
+  };
+
+  const stored = async (urlPrefix = "https://stub.test/") => {
+    const { marketNews } = await import("@/server/db/schema");
+    return db.select({ url: marketNews.url, headline: marketNews.headline }).from(marketNews)
+      .where(sql`${marketNews.url} like ${urlPrefix + "%"}`);
+  };
+
+  it("inserts every distinct item exactly once, across more than one batch", async () => {
+    // 450 items is more than the 200-row batch size, so the chunking boundary is exercised.
+    const items = Array.from({ length: 450 }, (_, i) => ({ headline: `H${i}`, url: `https://stub.test/${i}` }));
+    const inserted = await ingest(items);
+    expect(inserted).toBe(450);
+    expect(await stored()).toHaveLength(450);
+  }, 60_000);
+
+  it("survives two feeds carrying the same story in one run", async () => {
+    // Before the in-JavaScript dedupe this threw: ON CONFLICT cannot resolve against a row the same
+    // command is still inserting.
+    const items = [
+      { headline: "Same story, CNBC", url: "https://stub.test/dup" },
+      { headline: "Same story, Reuters", url: "https://stub.test/dup" },
+      { headline: "Other", url: "https://stub.test/other" },
+    ];
+    const inserted = await ingest(items);
+    expect(inserted).toBe(2);
+    const rows = await stored();
+    expect(rows).toHaveLength(2);
+    // The first occurrence wins, deterministically.
+    expect(rows.find((r) => r.url.endsWith("/dup"))!.headline).toBe("Same story, CNBC");
+  }, 60_000);
+
+  it("a second run adds nothing and loses nothing", async () => {
+    const items = Array.from({ length: 30 }, (_, i) => ({ headline: `H${i}`, url: `https://stub.test/r${i}` }));
+    expect(await ingest(items)).toBe(30);
+    expect(await ingest(items)).toBe(0);
+    expect(await stored()).toHaveLength(30);
+  }, 60_000);
+
+  it("adds only what is new when a run overlaps the previous one", async () => {
+    await ingest(Array.from({ length: 20 }, (_, i) => ({ headline: `H${i}`, url: `https://stub.test/o${i}` })));
+    const added = await ingest(Array.from({ length: 30 }, (_, i) => ({ headline: `H${i}`, url: `https://stub.test/o${i}` })));
+    expect(added).toBe(10);
+    expect(await stored()).toHaveLength(30);
+  }, 60_000);
+
+  it("does the whole ingestion in a bounded number of statements", async () => {
+    const items = Array.from({ length: 400 }, (_, i) => ({ headline: `H${i}`, url: `https://stub.test/q${i}` }));
+    const p = pool as unknown as { query: (...a: unknown[]) => Promise<unknown> };
+    const original = p.query.bind(p);
+    let n = 0;
+    p.query = (...args: unknown[]) => { n++; return original(...args); };
+    try { await ingest(items); } finally { p.query = original; }
+    // 400 rows in 200-row batches plus the retention delete: single digits, not 400.
+    expect(n).toBeLessThan(10);
   }, 60_000);
 });

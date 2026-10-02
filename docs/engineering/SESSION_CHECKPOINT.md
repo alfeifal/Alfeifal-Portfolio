@@ -14,22 +14,29 @@ The guard that prevents a repeat is in `src/server/db/index.ts`, covered by six 
 module only — scripts building their own connection are still unchecked, which is listed as residual
 risk rather than quietly left out.
 
+Every performance number in this session's documents was measured on a **disposable** database or in
+CI, never in production. Where a saving can only be confirmed in production (the cron's query count,
+the RSS batching) it is written down as unconfirmed, waiting on a deployment.
+
 ## Position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphases 3.21, 3.22, 3.23 and 3.24 — COMPLETE**; the SEC-008 incident is closed
-- **Next action: start 3.25 — performance and scalability audit.** Two items are already waiting for
-  it: the six tables carrying `user_id` with no leading index (3.21), and the suite's own duration
-  plus BUG-013's hang (3.23). 3.19.2B, 3.19.3 and `0008` stay blocked; do not retry them, and do not
-  ask for secrets in chat.
+- **Subphases 3.21 through 3.25 — COMPLETE**; the SEC-008 incident is closed
+- **Next action: start 3.26 — bug and technical-debt remediation.** It is driven by
+  `BUG_REGISTER.md`: BUG-005 (`notFound()` answers 200), BUG-008 (duplicate default watchlists) and
+  the open architecture-debt entries. 3.19.2B, 3.19.3, `0007`, `0008` and now `0009` stay blocked; do
+  not retry them, and do not ask for secrets in chat.
+- Two items that were waiting for 3.25 are closed: the six `user_id` tables were **measured and
+  deliberately left alone** (0.07–1.5 ms), and BUG-013's "hang" was **not a hang** — run 44 was
+  cancelled by my own `concurrency.cancel-in-progress` at 2m17s. The 20-minute CI bound was restored.
 
 ## Commit and git state
 
 - Branch `claude/personal-operating-system-nuoesg`
 - `0784150` → `8c0531d` (3.21) → `e2d03b3` (3.22) → `642c421`, `a72c985` (chores) → `77c7665`
-  (incident docs) → `1c71001`, `05999d7` (3.23) → the 3.24 commit
-- **CI is green.** Run 45 passed end to end — the first time any run in this project's history reached
-  the suite. Working tree clean, local == origin.
+  (incident docs) → `1c71001`, `05999d7` (3.23) → `7420655` (3.24) → the 3.25 commit
+- **CI is green.** Run 45 was the first run in this project's history to reach the suite at all; every
+  run since has passed. Working tree clean, local == origin.
 
 ## What was done
 
@@ -51,17 +58,29 @@ risk rather than quietly left out.
    across five rules, including two critical. Now **zero** in light, dark and phone width. Root cause
    of 25 of the 26 contrast nodes was one token in the shared header. BUG-015: my own first fix added
    `aria-label`s that shadowed visible labels — caught and reverted before it shipped.
+6. **3.25 — performance and scalability.** Measured first, on a **disposable** database
+   (`personal_os_perf`, ~110k rows, 3 users) with `scripts/perf-bench.ts`, which counts database round
+   trips as well as wall time. Two real defects, both reproduced before being claimed: **BUG-016**,
+   notification generation issued **1479 queries / 496 ms** because four candidate queries were
+   unbounded and every notice was a separate insert with its own dedupe read — now **31 / 38 ms**,
+   with a per-category cap of 20 over an explicit `ORDER BY` and one batched insert; and **BUG-017**,
+   account bootstrap wrote five rows without a transaction, so a failure part-way left a half-built
+   account — now one `db.transaction`. The daily cron went **4464 / 1610 ms → 120 / 274 ms**. Migration
+   `0009` adds the five FK indexes that were actually justified (cascade delete **684 → 105 ms**); it
+   is **not applied**. Negative findings were left alone on purpose: the six `user_id` tables from
+   3.21, 27 of the 38 missing FK indexes, and every remaining duplicate query.
 
 ## Tests run
 
 | | |
 |---|---|
-| Full suite | **915 passed / 38 files** (session start: 867 / 36) |
-| New this session | `tests/concurrency.test.ts` (11), `tests/ai-audit.test.ts` (11), 14 in `tests/operations.test.ts`, 11 in `tests/ux-coherence.test.ts`; 3 vacuous admin tests replaced by 4 real ones |
-| Confirmed to fail against the unfixed code | 6/7 concurrency; AI-001 location; 2/3 AI-002; 4 CI-config; 1 idempotence-claim; 2 supersede; 2 admin-guard; 8 accessibility |
+| Full suite | **930 passed / 38 files** (session start: 867 / 36) |
+| New this session | `tests/concurrency.test.ts` (11), `tests/ai-audit.test.ts` (11), 19 in `tests/operations.test.ts`, 11 in `tests/ux-coherence.test.ts`, 10 in `tests/performance.test.ts`; 3 vacuous admin tests replaced by 4 real ones |
+| Confirmed to fail against the unfixed code | 6/7 concurrency; AI-001 location; 2/3 AI-002; 4 CI-config; 1 idempotence-claim; 2 supersede; 2 admin-guard; 8 accessibility; 5 of the 10 performance tests (query bound, cap, determinism, atomic bootstrap ×2) |
 | Typecheck / lint / build | clean; 18 pre-existing lint warnings, unchanged |
 | **CI** | **green** — run 45: install 5 s, typecheck 14 s, lint 15 s, migrate 2 s, test 2m35s, build 30 s |
 | Browser audit | 25 routes × 3 configurations, zero axe violations, no horizontal overflow |
+| Benchmark | `pnpm perf:seed` + `pnpm perf:bench`, 13 scenarios, median of 5, on a disposable database — **never production** |
 
 ## Harness lessons worth not repeating
 
@@ -91,6 +110,16 @@ risk rather than quietly left out.
 - **`service postgresql start` is not enough here**: the project's test database is a separate cluster
   on port 5433 with a socket in `/tmp`. The session-start hook now handles it; if it ever needs doing
   by hand, that script is the reference.
+- **`\timing` with `tail -1` measures the last statement, not the one you care about.** My first
+  cascade figure ("80× faster") was the time of the `ROLLBACK`. Use `EXPLAIN ANALYZE`, which reports
+  per-trigger time, and read the plan.
+- **A cancelled CI run looks exactly like a hung one in the UI.** Read `conclusion` and the step
+  durations before touching a timeout. Mine said `cancelled` at 2m17s, by my own
+  `cancel-in-progress` when I pushed the next commit. Raising the timeout fixed nothing.
+- **Key a duplicate-query detector on SQL text *and* parameters.** On text alone, one prepared
+  statement reused with different periods looks like four duplicates.
+- **`.slice(0, N)` over a query with no `ORDER BY` caps an arbitrary N.** A cap is only a cap if the
+  set is ordered; otherwise the output changes between runs for no visible reason.
 - Carried forward: assert on `hits`/`total` not raw response text; `DELETE /api/me/sessions`
   reissues the cookie; clear `rate_limits` between probe phases; tests that count rows need their
   own user.
@@ -102,6 +131,7 @@ risk rather than quietly left out.
 | No production backup | `DATABASE_URL` + `BACKUP_PASSPHRASE` secrets in GitHub |
 | `0007` unapplied | A backup, then explicit authorization |
 | `0008` unapplied | The same; BUG-007 stays live in production until it lands |
+| `0009` unapplied | The same; it is purely additive (five `CREATE INDEX`), so it has nothing to pre-flight, but it still queues behind `0007` and `0008` |
 | Maintenance workflow failing | `APP_URL` variable + `CRON_SECRET` secret |
 | Vercel `CRON_SECRET` unconfirmed | Access to Vercel's environment variables |
 | Real-model AI evaluation | `ANTHROPIC_API_KEY` — and with it, SEC-007's mitigation could finally be tested |

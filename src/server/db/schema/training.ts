@@ -139,5 +139,10 @@ export const personalRecords = pgTable(
     achievedAt: timestamp("achieved_at", { withTimezone: true }).notNull().defaultNow(),
     source: dataSourceEnum("source").notNull().default("calculated"),
   },
-  (t) => [index("prs_user_exercise_idx").on(t.userId, t.exerciseId, t.kind)],
+  (t) => [
+    index("prs_user_exercise_idx").on(t.userId, t.exerciseId, t.kind),
+    // 27.6 ms of the account cascade: one scan of this table per deleted workout set, and a user has
+    // tens of thousands of those.
+    index("personal_records_set_idx").on(t.setId),
+  ],
 );

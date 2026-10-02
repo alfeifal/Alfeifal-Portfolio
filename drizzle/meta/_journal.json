@@ -64,6 +64,13 @@
       "when": 1790155317698,
       "tag": "0008_concurrency_unique_constraints",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790982087694,
+      "tag": "0009_perf_cascade_indexes",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Architecture status
 
-Written from the repository at `a72c985` + the 3.23 changes, not from prior reports.
+Written from the repository at `7420655` + the 3.25 changes, not from prior reports.
 `docs/ARCHITECTURE.md` remains the design document; this file records what is actually true now,
 including the parts that are true and unwelcome.
 
@@ -144,6 +144,86 @@ The audit needs a browser, and the GitHub runner has none, so **CI does not cove
 covers is the source-level half: the contrast arithmetic on the tokens, the labelling rule and its
 inverse, and the list-child rule.
 
+## Performance, as measured
+
+`scripts/perf-bench.ts` builds a disposable database (`personal_os_perf`), seeds five years of heavy
+use — ~110,000 rows across 3 accounts — and runs the application's own service functions, counting
+round trips off the driver rather than inferring them from the code. **Every figure below is a
+disposable-database measurement on a Unix socket. None of it is production**, where each round trip
+crosses a network to Neon and so costs far more than it does here; that makes the *query counts* the
+number that matters, not the milliseconds.
+
+| Scenario | ms | queries |
+|---|---|---|
+| AI system prompt (compact snapshot + memory) | 33 | 32 |
+| `lifeSnapshot`, all ten sections | 27 | 33 |
+| Analytics overview, month | 33 | 43 |
+| Analytics overview, year | 124 | 43 |
+| Global search, common term | 45 | 39 |
+| `generateNotifications` | 38 | 31 |
+| Transactions, default page | 3 | 1 |
+| Daily cron, 3 accounts | 274 | 120 |
+
+What that establishes:
+
+- **No path scales its query count with row count.** The one that did — `generateNotifications`, at
+  1,479 queries — is BUG-016, fixed. The others are constants: ~3 queries per snapshot section, one
+  per list page, 40 per account in the cron.
+- **The cron is linear in accounts, not rows**: 120 queries for 3 accounts, 40 each. Per-account work
+  is sequential by design, which is the safer choice on a serverless platform with a bounded pool.
+  Projected from 274 ms at 3 accounts, the 300 s Vercel window is not the binding constraint at any
+  user count this project will plausibly reach — but that is a projection from a local socket, not a
+  measurement.
+- **Pagination is sound.** Every list path defaults to a limit (200 transactions and tasks, 100
+  journal entries and notifications, 200 memories, 50 workouts); `listEvents` has none and does not
+  need one, being bounded by the calendar range it is given.
+- **Repeated queries were measured and left alone.** Keying on statement text *and* parameters —
+  text alone wrongly flags one prepared statement reused for this period and the previous one — the
+  only true repeats are `getPreferences` three times per analytics call and the training plan twice
+  per snapshot. Each is a primary-key or single-row read of a table with fewer than 50 rows. Measured,
+  negligible, not worth the indirection of request-scoped caching.
+
+### Indexes: what the measurement justified, and what it did not
+
+38 foreign keys had no supporting index. The cost of that shows up in cascades, where Postgres scans
+the child table once per deleted parent row. Measured on the cascade that deletes one account and its
+~37,000 rows, median of five `EXPLAIN ANALYZE` runs:
+
+| Index set | Cascade delete |
+|---|---|
+| none | **684 ms** |
+| the 2 largest | 131 ms |
+| **the 5 in migration 0009** | **105 ms** |
+| 8 | 100 ms |
+| 11 | 109 ms |
+| all 38 | 116 ms |
+
+Two triggers were 69% of the original: `events_task_id` at 408 ms (2,000 tasks deleted, each scanning
+4,500 events) and `tasks_milestone_id` at 133 ms. Migration `0009` adds the five whose individual
+trigger cost was independently measurable — `events(task_id)`, `tasks(milestone_id)`,
+`personal_records(set_id)`, `tasks(goal_id)`, `events(goal_id)` — and three of those also serve
+ordinary "for this goal / for this task" reads. **The other 27 were not added:** going from 8 to 38
+indexes bought nothing outside the noise band, and every index costs write throughput and storage on
+a 0.5 GB tier.
+
+**The six tables phase 3.21 flagged were measured and left alone.** They carry `user_id` with no
+leading index, and their real per-account read query is:
+
+| Table | Rows for one account | Query |
+|---|---|---|
+| `nutrition_entries` | 5,000 | 1.5 ms |
+| `milestones` | 400 | 0.17 ms |
+| `watchlist_items` | 120 | 0.14 ms |
+| `training_day_exercises` | 48 | 0.09 ms |
+| `training_days` | 8 | 0.08 ms |
+| `german_progress` | 1 | 0.07 ms |
+
+All sequential scans, all trivially fast, because the tables are small — `training_days` holds eight
+rows per account by construction and never will hold more. 3.21 flagged them on principle; the
+measurement says do nothing. The one with a growth path is `nutrition_entries`: an index takes it
+1.55 ms → 0.73 ms today, and since the scan is linear in the *whole* table it is worth adding when
+that table passes roughly 50,000 rows. Not before.
+
 ## Known architecture debt
 
 1. **The CSRF rule is implemented twice** (`proxy.ts` inline, `security/origin.ts` exported). Kept
@@ -158,12 +238,12 @@ inverse, and the list-child rule.
    `0007` lands there is no history to justify a number.
 6. **`drizzle.config.ts` defaults to `DATABASE_URL`**, so any `drizzle-kit` command points at
    production unless told otherwise. This has already caused one accidental (harmless) attempt.
-7. **One CI run hung in `pnpm test` for over 20 minutes**; the next run, on the same code, finished
-   the whole job in 4m16s with the suite at 2m35s. Unexplained, one occurrence, recorded as BUG-013.
-   `vitest` runs with `fileParallelism: false` — necessary, because the tests share one database and
-   several assert on global counts — and two suites spawn child processes via `npx tsx`, which is the
-   most likely place for a stall. The job bound is 20 minutes, proportionate to the 4-minute
-   measurement, so a repeat surfaces quickly rather than burning an hour.
+7. **The suite runs serially and takes ~2m35s in CI.** `vitest` is configured with
+   `fileParallelism: false`, which is necessary rather than incidental: the tests share one database
+   and several assert on counts that are global to it. Making it parallel means a database per file.
+   Not a problem at the current duration; the constraint is written down so the reason is not lost.
+   (The "hang" once recorded here was BUG-013 and has been withdrawn — that run was cancelled at
+   2m17s by this workflow's own `cancel-in-progress`.)
 8. **CI runs PostgreSQL 16; production runs 18.6.** The local development database is 16 too. Nothing
    currently depends on the difference — migration `0008` needs 15+ and no further — but a feature
    available on one and not the other would pass CI and fail production, or the reverse. Aligning CI

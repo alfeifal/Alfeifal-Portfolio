@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { createTestUser, deleteTestUser } from "./helpers";
-import { db } from "@/server/db";
+import { db, pool } from "@/server/db";
 import { notifications, tasks as tasksTable } from "@/server/db/schema";
 import { MAINTENANCE_INTERVAL_MS, dashboardData, __resetMaintenanceThrottle } from "@/server/services/dashboard";
 import * as tasks from "@/server/services/tasks";
@@ -143,6 +143,198 @@ describe("charts are split out of the first load", () => {
       const src = fs.readFileSync(`src/app/(app)/${p}/page.tsx`, "utf8");
       expect(src, p).toMatch(/from "@\/components\/charts"/);
       expect(src, p).not.toMatch(/charts-impl/);
+    }
+  });
+});
+
+/**
+ * Phase 3.25 — notification generation is bounded in both round trips and rows.
+ *
+ * Measured with `scripts/perf-bench.ts` against a disposable database seeded with five years of use:
+ * `generateNotifications` issued **1,479 queries and ~496 ms** for one account, because it called
+ * `notify()` — a SELECT and an INSERT — once per candidate, and the overdue-task query has no lower
+ * bound. That was 92% of the daily cron's 4,464 queries. Now 31 and ~51 ms, and the cron 120 and
+ * ~273 ms. Those are disposable-database figures, not production ones.
+ *
+ * These tests pin both halves: the round-trip count, counted off the driver rather than inferred,
+ * and the row count, so a backlog cannot turn into an avalanche.
+ */
+d("notification generation stays bounded", () => {
+  let user: Awaited<ReturnType<typeof createTestUser>>;
+
+  /** Counts what the pool actually sent, so the assertion cannot be fooled by how the code reads. */
+  const countingQueries = async <T>(fn: () => Promise<T>): Promise<[T, number]> => {
+    const p = pool as unknown as { query: (...a: unknown[]) => Promise<unknown> };
+    const original = p.query.bind(p);
+    let n = 0;
+    p.query = (...args: unknown[]) => { n++; return original(...args); };
+    try { return [await fn(), n]; } finally { p.query = original; }
+  };
+
+  const seedOverdueTasks = async (n: number) => {
+    const yesterday = addDaysKey(todayKey(TZ), -3);
+    await db.insert(tasksTable).values(
+      Array.from({ length: n }, (_, i) => ({ userId: user.id, title: `Overdue ${i}`, status: "todo" as const, dueDate: yesterday })),
+    );
+  };
+
+  beforeAll(async () => { user = await createTestUser(); });
+  afterAll(async () => { if (user) await deleteTestUser(user.id); });
+  beforeEach(async () => {
+    await db.delete(notifications).where(eq(notifications.userId, user.id));
+    await db.delete(tasksTable).where(eq(tasksTable.userId, user.id));
+  });
+
+  it("issues a number of queries that does not grow with the backlog", async () => {
+    await seedOverdueTasks(200);
+    const [, queries] = await countingQueries(() => generateNotifications(user.id, TZ));
+    // Two statements for the write, plus the fixed set of source queries. The old shape was ~2 per
+    // candidate, so 200 overdue tasks alone would have been north of 400.
+    expect(queries).toBeLessThan(80);
+  });
+
+  it("the query count is the same for 10 rows as for 400", async () => {
+    await seedOverdueTasks(10);
+    const [, few] = await countingQueries(() => generateNotifications(user.id, TZ));
+    await db.delete(notifications).where(eq(notifications.userId, user.id));
+    await db.delete(tasksTable).where(eq(tasksTable.userId, user.id));
+    await seedOverdueTasks(400);
+    const [, many] = await countingQueries(() => generateNotifications(user.id, TZ));
+    // This is the N+1 assertion: a constant, not a ratio.
+    expect(many).toBe(few);
+  });
+
+  it("caps the notices for a backlog and says how many it left out", async () => {
+    await seedOverdueTasks(75);
+    const created = await generateNotifications(user.id, TZ);
+    const rows = await db.select().from(notifications).where(and(eq(notifications.userId, user.id), eq(notifications.kind, "task")));
+    // 20 individual + 1 summary, never 75.
+    expect(rows).toHaveLength(21);
+    // `created` also covers the training and study notices the bootstrapped fixture produces.
+    expect(created).toBeGreaterThanOrEqual(21);
+    const summary = rows.find((r) => r.dedupeKey?.includes(":rest:"));
+    expect(summary, "a capped category must say what it left out").toBeTruthy();
+    expect(summary!.title).toContain("55 more");
+  });
+
+  it("the notices it keeps are the most overdue, not an arbitrary twenty", async () => {
+    /*
+     * The cap is a `slice` over the query's result, and the query had no ORDER BY — so which twenty
+     * tasks got a notice was whatever order the heap returned, and could differ between runs. Caught
+     * reviewing the diff, not by a failing test, which is why this one exists.
+     */
+    const today = todayKey(TZ);
+    await db.insert(tasksTable).values(
+      // 40 tasks, 1 to 40 days overdue. The notices must be for the 20 oldest.
+      Array.from({ length: 40 }, (_, i) => ({ userId: user.id, title: `Overdue ${i + 1}d`, status: "todo" as const, dueDate: addDaysKey(today, -(i + 1)) })),
+    );
+    await generateNotifications(user.id, TZ);
+    const rows = await db.select({ title: notifications.title }).from(notifications)
+      .where(and(eq(notifications.userId, user.id), eq(notifications.kind, "task")));
+    const individual = rows.filter((r) => r.title.startsWith("Overdue:")).map((r) => r.title);
+    expect(individual).toHaveLength(20);
+    // Days 21..40 are the oldest; days 1..20 are the newest and must be the ones summarised.
+    const days = individual.map((t) => Number(t.match(/(\d+)d$/)![1])).sort((a, b) => a - b);
+    expect(days[0]).toBe(21);
+    expect(days[19]).toBe(40);
+  });
+
+  it("does not summarise when everything fits", async () => {
+    await seedOverdueTasks(5);
+    await generateNotifications(user.id, TZ);
+    const rows = await db.select().from(notifications).where(and(eq(notifications.userId, user.id), eq(notifications.kind, "task")));
+    expect(rows).toHaveLength(5);
+    expect(rows.some((r) => r.dedupeKey?.includes(":rest:"))).toBe(false);
+  });
+
+  it("is still idempotent: a second run the same day creates nothing", async () => {
+    await seedOverdueTasks(30);
+    const first = await generateNotifications(user.id, TZ);
+    expect(first).toBeGreaterThan(0);
+    const second = await generateNotifications(user.id, TZ);
+    expect(second).toBe(0);
+    const rows = await db.select({ id: notifications.id }).from(notifications).where(eq(notifications.userId, user.id));
+    expect(rows).toHaveLength(first);
+  });
+
+  it("two overlapping runs do not double anything", async () => {
+    // The batch insert still leans on notifications_dedupe_uniq (migration 0008) to decide.
+    await seedOverdueTasks(12);
+    const [a, b] = await Promise.all([generateNotifications(user.id, TZ), generateNotifications(user.id, TZ)]);
+    const rows = await db.select({ id: notifications.id }).from(notifications)
+      .where(and(eq(notifications.userId, user.id), eq(notifications.kind, "task")));
+    expect(rows).toHaveLength(12);
+    // Between the two runs, each notice was created exactly once.
+    const all = await db.select({ id: notifications.id }).from(notifications).where(eq(notifications.userId, user.id));
+    expect(a + b).toBe(all.length);
+  });
+
+  it("never notifies one account about another's backlog", async () => {
+    const other = await createTestUser();
+    try {
+      await seedOverdueTasks(10);
+      await generateNotifications(other.id, TZ);
+      // The other account has its own bootstrapped data, so it may have notices — but none of them
+      // may be about the 10 overdue tasks that belong to this one.
+      const theirTasks = await db.select({ title: notifications.title }).from(notifications)
+        .where(and(eq(notifications.userId, other.id), eq(notifications.kind, "task")));
+      expect(theirTasks).toHaveLength(0);
+      const mine = await db.select({ id: notifications.id }).from(notifications).where(eq(notifications.userId, user.id));
+      expect(mine).toHaveLength(0); // and nothing was written to this account either
+    } finally {
+      await deleteTestUser(other.id);
+    }
+  });
+});
+
+/**
+ * Phase 3.25 — a new account is built atomically.
+ *
+ * Found while auditing transaction boundaries: `bootstrapUserData` was five sequential inserts, and a
+ * failure at any one left the earlier ones behind. Migration 0008 made that reachable — a category
+ * name is now unique per account and kind, so a retried bootstrap throws on the categories insert.
+ * Reproduced before the fix: the retry left a second "Main account" row and changed nothing else.
+ *
+ * A half-built account cannot be repaired from the UI, which is why this is an integrity test and not
+ * a performance one, even though a performance audit is what found it.
+ */
+d("a new account is bootstrapped all-or-nothing", () => {
+  let user: Awaited<ReturnType<typeof createTestUser>>;
+  afterAll(async () => { if (user) await deleteTestUser(user.id); });
+
+  const structural = async (id: string) => {
+    const { accounts, categories, subjects, tradingAccounts, watchlists } = await import("@/server/db/schema");
+    const n = async (t: never) => (await db.select().from(t).where(eq((t as unknown as { userId: typeof notifications.userId }).userId, id))).length;
+    return {
+      accounts: await n(accounts as never), categories: await n(categories as never), subjects: await n(subjects as never),
+      trading: await n(tradingAccounts as never), watchlists: await n(watchlists as never),
+    };
+  };
+
+  it("a failed retry leaves nothing behind", async () => {
+    const { bootstrapUserData } = await import("@/server/services/bootstrap");
+    user = await createTestUser(); // already bootstrapped once by the helper
+    const before = await structural(user.id);
+    expect(before.accounts).toBeGreaterThan(0);
+    expect(before.categories).toBeGreaterThan(0);
+
+    // The second call must fail — the category names collide — and must change nothing.
+    await expect(bootstrapUserData(user.id)).rejects.toThrow();
+    expect(await structural(user.id)).toEqual(before);
+  });
+
+  it("the structural defaults are all present after one run", async () => {
+    const fresh = await createTestUser();
+    try {
+      const s = await structural(fresh.id);
+      // One of each, and the categories; a partial set is the failure this guards against.
+      expect(s.accounts).toBe(1);
+      expect(s.subjects).toBe(1);
+      expect(s.trading).toBe(1);
+      expect(s.watchlists).toBe(1);
+      expect(s.categories).toBe(20);
+    } finally {
+      await deleteTestUser(fresh.id);
     }
   });
 });

@@ -101,7 +101,19 @@ export const tasks = pgTable(
     source: dataSourceEnum("source").notNull().default("user"),
     ...timestamps,
   },
-  (t) => [index("tasks_user_status_due_idx").on(t.userId, t.status, t.dueDate), index("tasks_project_idx").on(t.projectId)],
+  (t) => [
+    index("tasks_user_status_due_idx").on(t.userId, t.status, t.dueDate),
+    index("tasks_project_idx").on(t.projectId),
+    /*
+     * Both of these are foreign keys with no index, which means every cascade from the parent scans
+     * this whole table once per deleted parent row. Measured on a disposable database seeded with five
+     * years of use (scripts/perf-bench.ts), deleting one account spent 133 ms inside
+     * tasks_milestone_id_milestones_id_fk and 23 ms inside tasks_goal_id_goals_id_fk, out of 684 ms
+     * total. They also serve the ordinary "tasks for this goal / milestone" reads.
+     */
+    index("tasks_milestone_idx").on(t.milestoneId),
+    index("tasks_goal_idx").on(t.goalId),
+  ],
 );
 
 export const events = pgTable(
@@ -128,7 +140,15 @@ export const events = pgTable(
     source: dataSourceEnum("source").notNull().default("user"),
     ...timestamps,
   },
-  (t) => [index("events_user_start_idx").on(t.userId, t.startAt)],
+  (t) => [
+    index("events_user_start_idx").on(t.userId, t.startAt),
+    /*
+     * events_task_id_tasks_id_fk alone was 408 ms of the 684 ms account cascade — 2,000 tasks deleted,
+     * each scanning 4,500 events. The goal and project links are the same shape, smaller.
+     */
+    index("events_task_idx").on(t.taskId),
+    index("events_goal_idx").on(t.goalId),
+  ],
 );
 
 export const journalEntries = pgTable(

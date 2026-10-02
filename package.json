@@ -16,7 +16,9 @@
     "db:seed": "tsx scripts/seed.ts",
     "db:studio": "drizzle-kit studio",
     "backup": "bash scripts/backup.sh",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "perf:seed": "tsx scripts/perf-bench.ts seed",
+    "perf:bench": "tsx scripts/perf-bench.ts bench"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

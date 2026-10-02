@@ -69,18 +69,54 @@ export async function notify(userId: string, n: { kind: typeof notifications.$in
 }
 
 /**
+ * How many individual notices one category may produce in a single run, before the rest become one
+ * line that counts them.
+ *
+ * Four of the queries below have no lower bound: every overdue task, every active goal past its
+ * deadline, every late project, every late milestone. Measured on a disposable database seeded with
+ * five years of use (`scripts/perf-bench.ts`), one account had 1,479 overdue tasks — and because the
+ * dedupe key carries the date, that is 1,479 fresh notifications *every day*, against a list the UI
+ * reads 100 at a time. The cap is what stops a backlog becoming an avalanche; the summary line is
+ * what stops the cap hiding it.
+ */
+const MAX_PER_CATEGORY = 20;
+
+/**
  * Generates due notifications from the user's own data (tasks, deadlines, events, exams, goals).
  * Idempotent via dedupeKey; run on app load and by the cron endpoint.
  */
 export async function generateNotifications(userId: string, tz?: string) {
   const s = await notificationSettings(userId);
   const today = todayKey(tz);
-  let created = 0;
-  const add = async (n: Parameters<typeof notify>[1]) => { if (await notify(userId, n)) created++; };
+  /*
+   * Collected, then written once.
+   *
+   * This used to call `notify()` per candidate, which is a SELECT and an INSERT each. At the volume
+   * above that was 1,479 round trips and ~496 ms for a single account, and 92% of the whole daily
+   * cron's 4,464 queries. The work is identical; it is now two statements instead of two per row.
+   */
+  const pending: Parameters<typeof notify>[1][] = [];
+  // Still async, and still awaited at every call site, so none of the twenty call sites below had to
+  // change when the write moved to the end.
+  const add = async (n: Parameters<typeof notify>[1]) => { pending.push(n); };
+  /**
+   * Individual notices up to the cap, then one line for the remainder.
+   *
+   * Every list passed here is ordered by the column that makes the cap meaningful — most overdue
+   * first. Without that the cap would take whatever twenty rows the heap happened to return, so the
+   * notices a user got would be arbitrary and would change between runs for no visible reason.
+   */
+  const addCapped = async <T>(items: T[], one: (x: T) => Parameters<typeof notify>[1], rest: (n: number) => Parameters<typeof notify>[1]) => {
+    for (const x of items.slice(0, MAX_PER_CATEGORY)) await add(one(x));
+    if (items.length > MAX_PER_CATEGORY) await add(rest(items.length - MAX_PER_CATEGORY));
+  };
 
   if (s.tasks) {
-    const overdue = await db.select().from(tasks).where(and(eq(tasks.userId, userId), inArray(tasks.status, ["todo", "in_progress"]), sql`${tasks.dueDate} < ${today}`));
-    for (const t of overdue) await add({ kind: "task", title: `Overdue: ${t.title}`, body: `Was due ${t.dueDate}`, href: "/tasks?view=overdue", dedupeKey: `task:overdue:${t.id}:${today}` });
+    const overdue = await db.select().from(tasks).where(and(eq(tasks.userId, userId), inArray(tasks.status, ["todo", "in_progress"]), sql`${tasks.dueDate} < ${today}`))
+      .orderBy(asc(tasks.dueDate));
+    await addCapped(overdue,
+      (t) => ({ kind: "task", title: `Overdue: ${t.title}`, body: `Was due ${t.dueDate}`, href: "/tasks?view=overdue", dedupeKey: `task:overdue:${t.id}:${today}` }),
+      (n) => ({ kind: "task", title: `${n} more overdue tasks`, body: "Opened from the overdue view", href: "/tasks?view=overdue", dedupeKey: `task:overdue:rest:${today}` }));
     const dueToday = await db.select().from(tasks).where(and(eq(tasks.userId, userId), inArray(tasks.status, ["todo", "in_progress"]), eq(tasks.dueDate, today), inArray(tasks.priority, ["high", "urgent"])));
     for (const t of dueToday) await add({ kind: "task", title: `Due today: ${t.title}`, href: "/tasks", dedupeKey: `task:today:${t.id}` });
   }
@@ -107,35 +143,42 @@ export async function generateNotifications(userId: string, tz?: string) {
      * notice — per goal and deadline, per project and deadline, per milestone — not one per day.
      */
     const overdueGoals = await db.select().from(goals)
-      .where(and(eq(goals.userId, userId), eq(goals.status, "active"), isNotNull(goals.deadline), lt(goals.deadline, today)));
-    for (const g of overdueGoals) {
-      await add({ kind: "goal", title: `Goal past its deadline: ${g.name}`, body: `Was due ${g.deadline} · ${g.progress}% done`, href: `/goals/${g.id}`, dedupeKey: `goal:overdue:${g.id}:${g.deadline}` });
-    }
+      .where(and(eq(goals.userId, userId), eq(goals.status, "active"), isNotNull(goals.deadline), lt(goals.deadline, today)))
+      .orderBy(asc(goals.deadline));
+    await addCapped(overdueGoals,
+      (g) => ({ kind: "goal", title: `Goal past its deadline: ${g.name}`, body: `Was due ${g.deadline} · ${g.progress}% done`, href: `/goals/${g.id}`, dedupeKey: `goal:overdue:${g.id}:${g.deadline}` }),
+      (n) => ({ kind: "goal", title: `${n} more goals past their deadline`, href: "/goals", dedupeKey: `goal:overdue:rest:${today}` }));
 
     const projectDeadlines = await db.select().from(projects)
-      .where(and(eq(projects.userId, userId), inArray(projects.status, ["active", "planning", "on_hold"]), isNotNull(projects.deadline), lte(projects.deadline, horizon)));
-    for (const p of projectDeadlines) {
-      const late = p.deadline! < today;
-      await add({
-        kind: "deadline",
-        title: late ? `Project past its deadline: ${p.name}` : `Project deadline ${p.deadline}: ${p.name}`,
-        body: `${p.progress}% done`,
-        href: `/projects/${p.id}`,
-        dedupeKey: `project:${late ? "overdue" : "deadline"}:${p.id}:${p.deadline}`,
-      });
-    }
+      .where(and(eq(projects.userId, userId), inArray(projects.status, ["active", "planning", "on_hold"]), isNotNull(projects.deadline), lte(projects.deadline, horizon)))
+      .orderBy(asc(projects.deadline));
+    await addCapped(projectDeadlines,
+      (p) => {
+        const late = p.deadline! < today;
+        return {
+          kind: "deadline" as const,
+          title: late ? `Project past its deadline: ${p.name}` : `Project deadline ${p.deadline}: ${p.name}`,
+          body: `${p.progress}% done`,
+          href: `/projects/${p.id}`,
+          dedupeKey: `project:${late ? "overdue" : "deadline"}:${p.id}:${p.deadline}`,
+        };
+      },
+      (n) => ({ kind: "deadline", title: `${n} more project deadlines`, href: "/projects", dedupeKey: `project:deadline:rest:${today}` }));
 
     const dueMilestones = await db.select().from(milestones)
-      .where(and(eq(milestones.userId, userId), isNull(milestones.completedAt), isNotNull(milestones.dueDate), lte(milestones.dueDate, horizon)));
-    for (const m of dueMilestones) {
-      const late = m.dueDate! < today;
-      await add({
-        kind: "deadline",
-        title: late ? `Milestone past its due date: ${m.title}` : `Milestone due ${m.dueDate}: ${m.title}`,
-        href: m.projectId ? `/projects/${m.projectId}` : m.goalId ? `/goals/${m.goalId}` : "/goals",
-        dedupeKey: `milestone:${late ? "overdue" : "due"}:${m.id}:${m.dueDate}`,
-      });
-    }
+      .where(and(eq(milestones.userId, userId), isNull(milestones.completedAt), isNotNull(milestones.dueDate), lte(milestones.dueDate, horizon)))
+      .orderBy(asc(milestones.dueDate));
+    await addCapped(dueMilestones,
+      (m) => {
+        const late = m.dueDate! < today;
+        return {
+          kind: "deadline" as const,
+          title: late ? `Milestone past its due date: ${m.title}` : `Milestone due ${m.dueDate}: ${m.title}`,
+          href: m.projectId ? `/projects/${m.projectId}` : m.goalId ? `/goals/${m.goalId}` : "/goals",
+          dedupeKey: `milestone:${late ? "overdue" : "due"}:${m.id}:${m.dueDate}`,
+        };
+      },
+      (n) => ({ kind: "deadline", title: `${n} more milestones due or late`, href: "/goals", dedupeKey: `milestone:due:rest:${today}` }));
   }
   if (s.market) {
     const triggered = await db.select().from(priceAlerts).where(and(eq(priceAlerts.userId, userId), eq(priceAlerts.active, false), sql`${priceAlerts.triggeredAt} > now() - interval '1 day'`));
@@ -234,6 +277,39 @@ export async function generateNotifications(userId: string, tz?: string) {
     }
   }
 
-  return created;
+  return flushPending(userId, pending);
+}
+
+/**
+ * Writes the collected candidates in two statements and returns how many rows were actually created.
+ *
+ * The dedupe lookup is one `IN` over the keys this run produced, not one query per key, and the insert
+ * is one multi-row statement. `onConflictDoNothing` is still what decides under concurrency — the
+ * lookup only keeps the common case from reaching the index at all. Rows without a dedupe key always
+ * insert, exactly as `notify()` treats them.
+ */
+async function flushPending(userId: string, pending: Parameters<typeof notify>[1][]) {
+  if (!pending.length) return 0;
+  const keyed = pending.filter((n): n is typeof n & { dedupeKey: string } => Boolean(n.dedupeKey));
+  const keys = [...new Set(keyed.map((n) => n.dedupeKey))];
+  const existing = keys.length
+    ? new Set((await db.select({ k: notifications.dedupeKey }).from(notifications)
+        .where(and(eq(notifications.userId, userId), inArray(notifications.dedupeKey, keys)))).map((r) => r.k))
+    : new Set<string | null>();
+
+  // Deduplicate within the run too: two sources can produce the same key, and a repeated key in one
+  // multi-row INSERT cannot be resolved against a row the same statement is still inserting.
+  const seen = new Set<string>();
+  const rows = pending.filter((n) => {
+    if (!n.dedupeKey) return true;
+    if (existing.has(n.dedupeKey) || seen.has(n.dedupeKey)) return false;
+    seen.add(n.dedupeKey);
+    return true;
+  });
+  if (!rows.length) return 0;
+
+  const inserted = await db.insert(notifications).values(rows.map((n) => ({ userId, ...n })))
+    .onConflictDoNothing().returning({ id: notifications.id });
+  return inserted.length;
 }
 export { asc as _asc };

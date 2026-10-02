@@ -1,6 +1,6 @@
 # Production safety
 
-Last verified: 2026-10-02, against commit `a72c985` plus the phase 3.23 changes.
+Last verified: 2026-10-02, against commit `7420655` plus the phase 3.25 changes.
 
 Nothing in this file is written from a previous report. Every line was checked in the session that
 wrote it, and anything that could not be checked says so.
@@ -75,6 +75,25 @@ migration. Read-only against production, 2026-09-23 — **zero** rows violate an
 `ON CONFLICT DO NOTHING` clause is inert without the indexes, which is exactly today's behaviour —
 the duplicate writes of BUG-007 remain possible in production until it is applied. Applying it
 changes no data.
+
+### Migration `0009_perf_cascade_indexes` is also NOT applied
+
+Added in phase 3.25 for the cascade measurement in ARCHITECTURE_STATUS.md. Five statements, all
+`CREATE INDEX`, on `events(task_id)`, `events(goal_id)`, `tasks(milestone_id)`, `tasks(goal_id)` and
+`personal_records(set_id)`. No table, column, constraint or row is touched, and an index cannot fail
+on existing data the way a unique constraint can — so unlike `0008` there is nothing to pre-flight
+against production.
+
+**Verified on a disposable database, through the real migrator** (`pnpm db:migrate --test` against
+`personal_os_perf`, seeded with ~110,000 rows): all five indexes created, and the cascade that deletes
+one account went from **768 ms to 125 ms**. Measured again as a median of five runs from a clean
+baseline: **684 ms → 105 ms**.
+
+**Consequence of it being absent:** deleting an account, a goal, a category or an exercise scans child
+tables instead of seeking them. At production's current size — one account, 311 rows — that is
+unmeasurable. It matters at the volume the benchmark seeds, and not before.
+
+It queues behind `0007` and `0008`, which queue behind a verified backup and explicit authorization.
 
 ## Backup state
 
@@ -338,6 +357,7 @@ connections and are unaffected — which is itself a gap, noted below.
 | No backup | The two secrets above, set by the repository owner |
 | `0007` not applied | A verified backup, then explicit authorization |
 | `0008` not applied | The same; it applies after `0007` and BUG-007 stays live until it does |
+| `0009` not applied | The same; purely additive indexes, nothing to pre-flight |
 | `/api/admin/usage` returns 500 | `0007` |
 | Rate limiting is per-instance in production | `0007` |
 | GitHub Actions maintenance workflow failing (61 runs, never once succeeded) | `APP_URL` variable and `CRON_SECRET` secret |

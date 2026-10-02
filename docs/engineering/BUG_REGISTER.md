@@ -315,24 +315,39 @@ calls it exactly once, with `force: true`. Two fail against the unfixed registry
 
 ---
 
-## BUG-013 — one CI run hung in the test step for over twenty minutes
+## BUG-013 — WITHDRAWN: the CI run that "hung" was cancelled at 2m17s
 
-**Severity:** MEDIUM · **Status:** open, one unexplained occurrence, bounded
+**Status:** not a defect. My measurement error, corrected here with the evidence.
 
-Run 44 reached `pnpm test` and was still in it past 20 minutes. Run 45, on code differing only by a
-timeout value and documentation, finished the whole job in **4m16s** with the suite at **2m35s**.
+I recorded that CI run 44 hung in `pnpm test` for over twenty minutes, and raised the job bound to 45
+minutes on that reading. Phase 3.25 was asked to investigate rather than accept it. The GitHub API
+says plainly what happened:
 
-**This corrects a conclusion I drew too fast.** From run 44 alone I concluded "the suite is simply
-slower on a CI runner than locally" and raised the job bound to 45 minutes. The next run disproved
-that: it hung. The bound is back to 20 minutes — roughly five times the measured job — so a repeat
-surfaces in minutes rather than after an hour.
+| | |
+|---|---|
+| Run 44 conclusion | **`cancelled`** |
+| `pnpm test` step | started 02:42:36, completed **02:44:53** — **2m17s** |
+| Run 44 completed | 02:44:55 |
+| Run 45 created | 02:44:39 |
 
-**Where to look if it recurs.** `vitest` runs with `fileParallelism: false`, and two suites spawn
-child processes with `npx tsx` (the multi-process rate-limit test and the database-guard tests). A
-stalled child that never exits would look exactly like this. Nothing is being changed on one
-occurrence; this entry exists so the second one is recognised instead of re-diagnosed.
+Run 45 was created by my own next push, and `concurrency: cancel-in-progress: true` — which that same
+commit added — cancelled run 44 sixteen seconds later. Its test step ran 137 s; run 45's ran 155 s.
+There was no hang, and nothing to reproduce.
 
----
+**Where the twenty minutes came from:** me. I polled the job repeatedly across several turns while
+real time passed on my side, and read a step that still reported `in_progress` as a step still
+running. I never re-read the run's `conclusion` until afterwards. The lesson is about the method:
+`status: in_progress` from a snapshot is not evidence of elapsed time — the step's own
+`started_at`/`completed_at` are, and the run's `conclusion` is what says whether it finished at all.
+
+**Second lesson, about the workflow:** with `cancel-in-progress: true`, pushing a follow-up commit
+kills the verification run of the previous one. "Push, then watch the earlier run" cannot work.
+
+**What was done:** the job bound is back to 20 minutes, which is ~5× the measured 4m16s job, and the
+two things that would make a genuine hang diagnosable were checked and are already in place —
+`testTimeout: 30000` and `hookTimeout: 60000` in `vitest.config.ts`, and an explicit `timeout: 60_000`
+on every `execFileAsync` that spawns a child process. A hung test fails as a test; it does not hang
+the job.
 
 ## BUG-014 — five classes of accessibility defect across every route
 
@@ -405,6 +420,76 @@ wrapper, which is what prompted the bad sweep in the first place. It now asserts
 its inverse: no control may carry both a wrapper label and an `aria-label`. Containment is checked by
 finding the nearest unclosed labelled opener, not by a fixed look-back, because the shared prompt's
 `<Field>` opens further back than any window I guessed.
+
+---
+
+## BUG-016 — notification generation was two round trips per candidate, over an unbounded candidate set
+
+**Severity:** HIGH · **Status:** fixed, measured
+
+Found with `scripts/perf-bench.ts` against a disposable database seeded with five years of use
+(~110,000 rows, 3 accounts). `generateNotifications` called `notify()` once per candidate, and
+`notify()` is a SELECT plus an INSERT. Four of its source queries have no lower bound: every overdue
+task, every active goal past its deadline, every late project, every late milestone.
+
+**Measured, disposable database — not production:**
+
+| Scenario | Before | After |
+|---|---|---|
+| `generateNotifications`, one account | **1,479 queries / 496 ms** | **31 queries / 38 ms** |
+| `runMaintenance(["daily"])`, 3 accounts | **4,464 queries / 1,610 ms** | **120 queries / 274 ms** |
+
+Notification generation was 92% of the whole daily cron's query count. That cron is the only
+scheduled path that actually runs in production (see PRODUCTION_SAFETY.md), inside a 300 s window.
+
+**The second half of the finding is not performance at all.** The dedupe key for an overdue task
+carries the date — `task:overdue:<id>:<today>` — so a backlog of 1,479 overdue tasks produced 1,479
+*fresh* notifications every single day, against a list the UI reads 100 at a time. The faster version
+would simply have produced the avalanche faster.
+
+**Fix.** Candidates are collected and written in two statements: one `IN` over the dedupe keys this
+run produced, then one multi-row insert with `onConflictDoNothing`, which is still what decides under
+concurrency. And each unbounded category emits at most 20 individual notices plus one line counting
+the remainder.
+
+**Caught by reviewing the diff, not by a test:** the cap is a `slice` over the query result, and those
+four queries had no `ORDER BY` — so which twenty tasks got a notice was whatever order the heap
+returned, and could change between runs. All four are now ordered by the column that makes the cap
+mean something (most overdue first), with a test that pins it.
+
+**Regression tests** in `tests/performance.test.ts`: the query count does not grow with the backlog
+(constant for 10 rows and for 400 — the N+1 assertion as an equality, not a ratio), the cap holds at
+20 + 1, the summary names the right remainder, the kept notices are the most overdue, a second run
+the same day creates nothing, two overlapping runs do not double anything, and nothing crosses
+between accounts. Three fail against the unfixed generator.
+
+---
+
+## BUG-017 — a new account was not built atomically
+
+**Severity:** MEDIUM, data integrity · **Status:** fixed, reproduced first
+
+Found while auditing transaction boundaries: the whole codebase had two `db.transaction` calls, and
+`bootstrapUserData` — five sequential inserts across `accounts`, `categories`, `subjects`,
+`trading_accounts` and `watchlists` — was not one of them.
+
+**Migration 0008 is what made it reachable.** That migration made a category name unique per account
+and kind, so a *retried* bootstrap now throws on the categories insert. Reproduced before the fix:
+
+```
+after one bootstrap : {"accounts":1,"categories":20,"subjects":1,"trading":1,"watchlists":1,"plans":1}
+second bootstrap threw: Failed query: insert into "categories" ...
+after failed retry   : {"accounts":2,"categories":20,"subjects":1,"trading":1,"watchlists":1,"plans":1}
+```
+
+A second "Main account" row, and nothing else — the inserts before the failure stayed. Partial
+structural data is worse than none: the account looks set up and silently lacks a watchlist or a paper
+trading account, and there is no button anywhere to finish the job.
+
+**Fix:** the five inserts are one transaction. `seedRoutine` stays outside it — it already has its own
+transaction and its own early return, and nesting would pull its hundred-plus inserts into this
+commit for no benefit. **Regression test** asserts a failed retry changes nothing; it fails against the
+unfixed version with `accounts: 2`.
 
 ---
 
