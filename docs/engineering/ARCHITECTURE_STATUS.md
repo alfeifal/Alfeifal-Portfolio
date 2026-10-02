@@ -135,18 +135,25 @@ the six at realistic row counts, and add the index where a sequential scan actua
    `0007` lands there is no history to justify a number.
 6. **`drizzle.config.ts` defaults to `DATABASE_URL`**, so any `drizzle-kit` command points at
    production unless told otherwise. This has already caused one accidental (harmless) attempt.
-7. **CI runs PostgreSQL 16; production runs 18.6.** The local development database is 16 too. Nothing
+7. **The suite takes over 20 minutes on a CI runner**, against 3.4 minutes locally. `vitest` is
+   configured with `fileParallelism: false` — necessary, because the tests share one database and
+   several assert on global counts — so 38 files run one after another, and most of the time is real
+   round trips rather than computation. The CI job's bound was raised to 45 minutes on that
+   measurement rather than tuned around. Making it faster means either a database per file or
+   accepting fewer real-database tests; neither is a change to make casually, and it belongs to the
+   performance phase.
+8. **CI runs PostgreSQL 16; production runs 18.6.** The local development database is 16 too. Nothing
    currently depends on the difference — migration `0008` needs 15+ and no further — but a feature
    available on one and not the other would pass CI and fail production, or the reverse. Aligning CI
    to 18 is the next step and was deliberately not bundled with the change that made CI run at all.
-8. **The GitHub Actions in use target Node 20**, which GitHub has deprecated; they are being forced
+9. **The GitHub Actions in use target Node 20**, which GitHub has deprecated; they are being forced
    onto Node 24 with a warning today and will eventually stop. `actions/checkout`,
    `pnpm/action-setup`, `actions/setup-node`, `actions/upload-artifact` all need a major bump, and
    they are pinned to mutable tags rather than commit SHAs.
-9. **The assistant reads third-party text in a loop that can act** (SEC-007). `get_market_news`
+10. **The assistant reads third-party text in a loop that can act** (SEC-007). `get_market_news`
    returns RSS headlines verbatim, and low-risk tools — `remember_memory` among them — execute
    without a confirmation step. Mitigated by labelling the content and by a system-prompt rule;
    the mitigation is an instruction to a model and has never been tested against a real one.
-10. **The database-target guard covers one module, not a perimeter.** `src/server/db` refuses a
+11. **The database-target guard covers one module, not a perimeter.** `src/server/db` refuses a
    remote host from a non-production process (SEC-008), but `scripts/migrate.ts`, `scripts/backup.sh`
    and anything using `neon()` or `pg` directly build their own connections and are unchecked.

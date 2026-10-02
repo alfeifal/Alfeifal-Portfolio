@@ -17,7 +17,13 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Measured on the first run that ever got this far: install 5 s, typecheck 18 s, lint 18 s,
+    # migrate 2 s — and then the suite ran past 20 minutes, where this bound used to be, against 3.4
+    # minutes on a development machine. 38 test files run serially (`fileParallelism: false`) and most
+    # of the time is real database round trips. 45 minutes is a bound that still catches a hang
+    # without failing a healthy run; the suite's own duration is a separate concern, recorded in
+    # ARCHITECTURE_STATUS.md for the performance phase.
+    timeout-minutes: 45
     services:
       postgres:
         # NOTE: production runs PostgreSQL 18.6. This is 16, which is also what the project's

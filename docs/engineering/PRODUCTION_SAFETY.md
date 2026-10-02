@@ -150,6 +150,33 @@ Consequences, while this stands:
 - **AI transcripts live up to 48 h against a stated 24 h TTL**, because the purge runs daily.
   Currently moot: `ai_conversations` is empty.
 
+### What the frequent workflow would buy today: nothing
+
+Worth knowing before spending effort on the two missing secrets. Read from production, 2026-10-02:
+
+| | |
+|---|---|
+| Price alerts | **0** |
+| Investment assets / transactions | **0 / 0** |
+| Trades | **0** |
+| Watchlist items | **0** |
+| Cached quotes | **0** — nothing has ever needed one |
+| Recurring transaction rules | **0** |
+| AI conversations | **0** |
+
+So the frequent scope has no work: `checkAlerts` has no alerts to check, `purgeExpiredConversations`
+has nothing to purge. The daily snapshot correctly records `total_value 0.00` with an empty
+allocation, which is the truthful answer for an empty portfolio.
+
+**Two consequences, stated plainly.** First, phase 3.19 justified the whole GitHub Actions workflow on
+"a price alert compares the live quote at the moment it runs" — true in principle, and there is not one
+price alert in the database. Setting `APP_URL` and `CRON_SECRET` is still right, but it buys nothing
+until the owner creates an alert or a holding, and it should not be prioritised as though something
+were currently broken by its absence. Second, **the quote provider path has never executed in
+production**: `market_quotes` is empty, so Finnhub/Stooq/Yahoo/CoinGecko have never been reached from
+the deployment. It is tested locally and against stubs; it is not verified live, and nothing in these
+documents should imply otherwise.
+
 ### Even working, the 15-minute cadence is fiction
 
 Sampled from the run list over 30 hours: 12 runs — 00:10, 20:35, 15:42, 08:46, 02:03, 23:04, 19:07,
