@@ -7,7 +7,7 @@ external prerequisite is missing. Nothing is marked from a previous report.
 ## Current position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphase in progress:** 3.26 (bug and technical-debt remediation); 3.21–3.25 complete
+- **Subphase in progress:** 3.27 (full regression / release readiness); 3.21–3.26 complete
 - **Commit:** see `SESSION_CHECKPOINT.md`
 
 ## Phase 3
@@ -32,8 +32,8 @@ external prerequisite is missing. Nothing is marked from a previous report.
 | **3.23** cron / CI-CD / operations | COMPLETE | BUG-010/011/012 fixed; cadence and duration measured in production; `.claude/hooks/session-start.sh` added |
 | **3.24** UX / accessibility | COMPLETE | BUG-014/015 fixed; axe-core over 25 routes in light, dark and phone width, zero violations; `scripts/a11y-audit.mjs` |
 | **3.25** performance & scalability | COMPLETE | BUG-016/017 fixed, BUG-013 withdrawn; `scripts/perf-bench.ts`; migration `0009` from measured evidence; the six `user_id` indexes measured and deliberately not added |
-| 3.26 bug & debt remediation | **NEXT** | Driven by `BUG_REGISTER.md`: BUG-005, BUG-008 and the open architecture debt |
-| 3.27 full regression / release readiness | NOT STARTED | Cannot pass while production blockers stand |
+| 3.26 bug & debt remediation | COMPLETE | BUG-005 and BUG-008 fixed; BUG-018 and BUG-019 found and fixed; 6 of the 11 architecture-debt items closed; `tests/http-contract.test.ts` |
+| 3.27 full regression / release readiness | **NEXT** | Cannot pass while the production blockers stand; what it *can* do is establish exactly what is verified and what is dormant |
 
 ## Phases 4–12
 
@@ -62,6 +62,7 @@ An agent may not set secrets, so these will not clear themselves and are not ret
                                         └──> 0008 ──> BUG-007 actually fixed in production
 SEC-003 (secrets) ──> frequent maintenance runs ──> BUG-006 re-measurable
 3.20 ──> 3.21 ──> 3.22 ──> 3.23 ──> 3.24 ──> 3.25 ──> 3.26 ──> 3.27
+                                                                  ▲ here
 ```
 
 Everything below 3.24 is independent of the production blockers and can proceed. 3.21, 3.22 and 3.23

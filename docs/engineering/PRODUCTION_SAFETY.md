@@ -325,17 +325,41 @@ allowed for a local database with no ceremony.
 **Commit:** `e2d03b3` carries the guard and its tests. `642c421` follows it (unrelated chore).
 
 **Consequence for existing commands:** `pnpm db:seed` reaches production through `@/server/db`, so
-it now needs `ALLOW_REMOTE_DB=1` in front of it. `pnpm db:migrate` and `pnpm backup` build their own
-connections and are unaffected — which is itself a gap, noted below.
+it now needs `ALLOW_REMOTE_DB=1` in front of it.
+
+### Extended to a perimeter in phase 3.26
+
+The guard above covered one module, and that was recorded as the incident's main remaining risk. It
+is now one rule in `src/server/db/target.ts`, called by every entry point that opens a connection:
+
+| entry point | before 3.26 | now |
+|---|---|---|
+| `src/server/db/index.ts` (the app, `db:seed`) | guarded | guarded, by the shared rule |
+| `scripts/migrate.ts` (`pnpm db:migrate`) | **unguarded** — built its own `Pool` | refuses a remote target without `ALLOW_REMOTE_DB=1`, and names the host it is about to change before changing it |
+| `drizzle.config.ts` (`drizzle-kit push`, `studio`) | **defaulted to `DATABASE_URL`** | defaults to the local database; `DATABASE_URL` needs `ALLOW_REMOTE_DB=1`; an explicit remote `DRIZZLE_DATABASE_URL` needs it too |
+| `scripts/perf-bench.ts` | never a risk | unchanged: its URLs are literals, and it refuses any database but the disposable one |
+| `scripts/backup.sh` | unguarded | still unguarded, deliberately — see risk 1 below |
+
+So applying migrations to production is now `ALLOW_REMOTE_DB=1 pnpm db:migrate`, which is a sentence
+somebody has to type, and the script prints the hostname first. **This changes nothing about the
+authorization rules below: a migration against production still needs a verified backup and explicit
+written approval, and none of `0007`, `0008` or `0009` has either.**
+
+**Regression tests:** seven more in `tests/operations.test.ts`, under *"every entry point that opens a
+connection is guarded, not just the app's module"*. They run the real `scripts/migrate.ts`, load the
+real `drizzle.config.ts` and run the real `scripts/backup.sh` in child processes, because a guard is
+only tested where the mistake can actually be made. Each also asserts the output names the host and
+never the credentials.
 
 ### Remaining risk
 
-1. **The guard only covers `@/server/db`.** `scripts/migrate.ts`, `scripts/backup.sh` and anything
-   using `neon()` or `pg` directly build their own connection and are not checked. That is partly
-   deliberate — the read-only production probes in these documents work that way — but it means the
-   guard is a safety net for one specific, repeated mistake, not a perimeter.
-2. **`drizzle-kit` is still unguarded.** `drizzle.config.ts` defaults to `DATABASE_URL`, so any
-   `drizzle-kit` command points at production unless told otherwise. `push` remains forbidden.
+1. **`scripts/backup.sh` is still not gated, and should not be.** `pg_dump` only reads, and dumping
+   production is the entire purpose of the script. It now echoes the hostname it is dumping, so a
+   backup can be matched to a database; the risk it removes is a backup of the wrong database filed as
+   a backup of the right one, not a write.
+2. **Read-only production probes in these documents still use `psql` directly.** That is deliberate
+   and unchanged: they read, they are quoted in full where they were used, and gating them would only
+   make the documentation harder to reproduce.
 3. **`ALLOW_REMOTE_DB=1` is one keystroke.** It is meant to be: the point is that reaching
    production has to be typed deliberately, not that it is impossible.
 4. **Nothing was lost, and nothing is outstanding from this incident.** Production holds exactly one
@@ -343,9 +367,11 @@ connections and are unaffected — which is itself a gap, noted below.
 
 ## Deployment restrictions
 
-- **Never** `drizzle-kit push` against production. `drizzle.config.ts` defaults to `DATABASE_URL`,
-  so `drizzle-kit` commands point at production unless told otherwise — a `push` was started here
-  by mistake once, and only failed to touch anything because it could not open a connection.
+- **Never** `drizzle-kit push` against production. The rule stands whatever the configuration says.
+  Since 3.26 `drizzle.config.ts` no longer points there by default — it takes the local database
+  unless `ALLOW_REMOTE_DB=1` is set — which removes the accident, not the prohibition. A `push` was
+  started here by mistake once under the old default, and only failed to touch anything because it
+  could not open a connection.
 - Migrations go through `pnpm db:migrate --http` and nothing else.
 - Port 5432 is unreachable from this environment; anything needing a direct connection must run
   elsewhere.

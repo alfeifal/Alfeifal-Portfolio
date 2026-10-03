@@ -21,11 +21,14 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
 ## Position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphases 3.21 through 3.25 — COMPLETE**; the SEC-008 incident is closed
-- **Next action: start 3.26 — bug and technical-debt remediation.** It is driven by
-  `BUG_REGISTER.md`: BUG-005 (`notFound()` answers 200), BUG-008 (duplicate default watchlists) and
-  the open architecture-debt entries. 3.19.2B, 3.19.3, `0007`, `0008` and now `0009` stay blocked; do
-  not retry them, and do not ask for secrets in chat.
+- **Subphases 3.21 through 3.26 — COMPLETE**; the SEC-008 incident is closed
+- **Next action: start 3.27 — full regression and release readiness.** It cannot *pass* while the
+  production blockers stand, and that is the point of running it: establish exactly what is verified,
+  what is dormant in production, and what is only claimed. 3.19.2B, 3.19.3, `0007`, `0008` and `0009`
+  stay blocked; do not retry them, and do not ask for secrets in chat.
+- 3.26 closed BUG-005 and BUG-008 and found two more on the way (BUG-018, BUG-019). Six of the eleven
+  architecture-debt items are closed; the five that remain are in `ARCHITECTURE_STATUS.md` with the
+  reason each one is still open, and three of them are the production gate.
 - Two items that were waiting for 3.25 are closed: the six `user_id` tables were **measured and
   deliberately left alone** (0.07–1.5 ms), and BUG-013's "hang" was **not a hang** — run 44 was
   cancelled by my own `concurrency.cancel-in-progress` at 2m17s. The 20-minute CI bound was restored.
@@ -34,9 +37,13 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
 
 - Branch `claude/personal-operating-system-nuoesg`
 - `0784150` → `8c0531d` (3.21) → `e2d03b3` (3.22) → `642c421`, `a72c985` (chores) → `77c7665`
-  (incident docs) → `1c71001`, `05999d7` (3.23) → `7420655` (3.24) → the 3.25 commit
+  (incident docs) → `1c71001`, `05999d7` (3.23) → `7420655` (3.24) → `291107c` (3.25) → the 3.26 commit
 - **CI is green.** Run 45 was the first run in this project's history to reach the suite at all; every
-  run since has passed. Working tree clean, local == origin.
+  run since has passed, including run 47 on the 3.25 commit (test 180s, job well inside the 20-minute
+  bound). Working tree clean, local == origin.
+- **CI now runs PostgreSQL 18**, the same major as production, and every action in every workflow is
+  pinned to a commit. Both of those were verified by CI rather than locally: there is no PostgreSQL 18
+  in this environment and no container runtime to start one.
 
 ## What was done
 
@@ -69,14 +76,28 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
    `0009` adds the five FK indexes that were actually justified (cascade delete **684 → 105 ms**); it
    is **not applied**. Negative findings were left alone on purpose: the six `user_id` tables from
    3.21, 27 of the 38 missing FK indexes, and every remaining duplicate query.
+7. **3.26 — bugs and technical debt.** BUG-005: the root cause was not "app-wide Next.js behaviour" but
+   one `loading.tsx` above the route group, flushing the response before any page body could set a
+   status; established by removing that file and re-measuring. `/admin` for a non-admin went **200 →
+   404**, verified in a browser against a production build, with the skeleton kept for every route. The
+   old entry's claim that it reproduced on `/projects/[id]` was wrong and is corrected. BUG-008:
+   reproduced from the state that makes it reachable — eight concurrent first adds left **six** default
+   watchlists — and fixed with a transaction-scoped advisory lock, so no migration and nothing waiting
+   on the production gate. **BUG-018**, found while unifying the CSRF rule: the two copies had drifted,
+   and a malformed `Referer` made `isTrustedOrigin` *throw*, which `errorResponse` turned into **500**
+   instead of 403. **BUG-019**, found while extending the database guard: `DATABASE_SSL` was applied to
+   local targets, so `pnpm db:migrate --test` could only work because the session hook passed
+   `DATABASE_SSL=false` — a harness workaround standing in for a fix. Also: the database-target guard is
+   now a perimeter rather than one module, `drizzle-kit` no longer defaults to production, and a 3.23
+   test that asserted on a line of `proxy.ts` source was rewritten to call `proxy()` instead.
 
 ## Tests run
 
 | | |
 |---|---|
-| Full suite | **930 passed / 38 files** (session start: 867 / 36) |
-| New this session | `tests/concurrency.test.ts` (11), `tests/ai-audit.test.ts` (11), 19 in `tests/operations.test.ts`, 11 in `tests/ux-coherence.test.ts`, 10 in `tests/performance.test.ts`; 3 vacuous admin tests replaced by 4 real ones |
-| Confirmed to fail against the unfixed code | 6/7 concurrency; AI-001 location; 2/3 AI-002; 4 CI-config; 1 idempotence-claim; 2 supersede; 2 admin-guard; 8 accessibility; 5 of the 10 performance tests (query bound, cap, determinism, atomic bootstrap ×2) |
+| Full suite | **960 passed / 39 files** (session start: 867 / 36) |
+| New this session | `tests/concurrency.test.ts` (12), `tests/ai-audit.test.ts` (11), `tests/http-contract.test.ts` (18), 28 in `tests/operations.test.ts`, 11 in `tests/ux-coherence.test.ts`, 10 in `tests/performance.test.ts`; 3 vacuous admin tests replaced by 4 real ones, and 1 brittle source-string test rewritten to call the code |
+| Confirmed to fail against the unfixed code | 6/7 concurrency + the watchlist race (6 lists where 1 is required); AI-001 location; 2/3 AI-002; 4 CI-config, and 2 more for the pinning and the database major; 1 idempotence-claim; 2 supersede; 2 admin-guard; 8 accessibility; 5 of 10 performance; 6 of 10 HTTP-contract; 3 of 8 CSRF-parity |
 | Typecheck / lint / build | clean; 18 pre-existing lint warnings, unchanged |
 | **CI** | **green** — run 45: install 5 s, typecheck 14 s, lint 15 s, migrate 2 s, test 2m35s, build 30 s |
 | Browser audit | 25 routes × 3 configurations, zero axe violations, no horizontal overflow |
@@ -120,6 +141,20 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
   statement reused with different periods looks like four duplicates.
 - **`.slice(0, N)` over a query with no `ORDER BY` caps an arbitrary N.** A cap is only a cap if the
   set is ordered; otherwise the output changes between runs for no visible reason.
+- **A test that asserts on a line of source is a test of the formatting.** One from 3.23 pinned a
+  literal string from `proxy.ts` and broke the moment that rule moved into the module that already
+  owned it — the source had changed, the contract had not. Call the thing and assert what it answers.
+  (The exception that earns its place: a *structural* sweep over files, like "no page under a Suspense
+  fallback relies on `notFound()`", which is an invariant no behavioural test can reach.)
+- **Removing a file to see what changes is a legitimate experiment.** Moving `(app)/loading.tsx` aside,
+  rebuilding and re-measuring turned "app-wide Next.js streaming behaviour" into one file and one line.
+  A root cause you have not made disappear and come back is a hypothesis.
+- **Two copies of a security rule are defence in depth only while they agree.** These had drifted into
+  a 500 where a 403 belonged. If a rule is worth applying twice, import it twice.
+- **A workaround in the harness hides a defect indefinitely.** `pnpm db:migrate --test` had been broken
+  for anyone without the session hook's `DATABASE_SSL=false`, and nothing was ever red.
+- **`??` is not `||`.** A variable that is set but empty passes `??` and becomes the connection string.
+  Both instances were found by a test asserting the *default* target, not by reading the code.
 - Carried forward: assert on `hits`/`total` not raw response text; `DELETE /api/me/sessions`
   reissues the cookie; clear `rate_limits` between probe phases; tests that count rows need their
   own user.
@@ -132,6 +167,7 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
 | `0007` unapplied | A backup, then explicit authorization |
 | `0008` unapplied | The same; BUG-007 stays live in production until it lands |
 | `0009` unapplied | The same; it is purely additive (five `CREATE INDEX`), so it has nothing to pre-flight, but it still queues behind `0007` and `0008` |
+| PostgreSQL 18 locally | Not installable here and there is no container runtime, so the 18 pairing of CI and production is verified **in CI only**; the development cluster is still 16 |
 | Maintenance workflow failing | `APP_URL` variable + `CRON_SECRET` secret |
 | Vercel `CRON_SECRET` unconfirmed | Access to Vercel's environment variables |
 | Real-model AI evaluation | `ANTHROPIC_API_KEY` — and with it, SEC-007's mitigation could finally be tested |
@@ -148,3 +184,16 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
 - Carried forward from 3.21: `ON CONFLICT DO NOTHING` + re-read rather than a targeted upsert, so
   the code is correct both before and after a blocked migration; category names are unique per
   (user, kind), case-insensitively, on purpose.
+- **A guard that affects the HTTP status belongs above the Suspense boundary.** That is the layout, and
+  it is the reason the role table exists at all. The page keeps its own check: the table decides the
+  status, not who may see the page. If the proxy's header is ever missing, the page's guard answers and
+  the worst case is the old wrong status — never a page shown to somebody who may not see it.
+- **An advisory lock is the right fix when a unique index would be partial.** BUG-008 needed
+  `(user_id) WHERE is_default`, which would also constrain a path that legitimately moves the flag — and
+  any migration here waits behind the production gate, so the defect would have stayed live. A
+  transaction-scoped lock needs nothing but the code.
+- **Pin actions to commits, bump them deliberately.** `@v4` is a branch its owner can move. The version
+  goes in a trailing comment so the file stays readable, and a test fails on any `uses:` that is not a
+  40-character commit.
+- **Keep CI's database on production's major, and pin the major rather than the patch.** A managed
+  database moves on its own; the thing worth pinning is the compatibility boundary.

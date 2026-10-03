@@ -210,15 +210,39 @@ export async function listWatchlists(userId: string) {
   return wls.map((w) => ({ ...w, items: items.filter((i) => i.watchlistId === w.id) }));
 }
 export const watchlistItemSchema = z.object({ watchlistId: z.string().uuid().optional(), symbol: z.string().min(1).max(20).transform((s) => s.toUpperCase()), name: z.string().max(100).nullish(), assetClass: z.enum(["stock", "etf", "crypto", "forex", "commodity", "index", "other"]).default("stock"), notes: z.string().max(2000).nullish() });
+/**
+ * The account's default watchlist, created on first use — once, however many callers ask at once.
+ *
+ * BUG-008: this was a select-then-insert. `bootstrapUserData` gives every new account a list, so the
+ * branch only opens after the owner deletes all of them; reproduced from that state, eight
+ * simultaneous adds left **six** lists behind, all flagged default. The symbols then scatter across
+ * them and the UI shows one list with a third of them on it.
+ *
+ * A transaction-scoped advisory lock keyed on the account is the whole fix. A unique index would have
+ * to be partial — `(user_id) WHERE is_default` — which also constrains "make this other list the
+ * default", a path that has to clear the old flag and set the new one; that is more schema than this
+ * defect is worth, and it would need a migration, which in this repository means waiting behind a
+ * production gate. The lock needs nothing but the code, and releases itself when the transaction ends.
+ *
+ * `hashtextextended` is stable across sessions and servers, so two application instances hash the same
+ * account to the same lock. The key is namespaced, so an unrelated advisory lock cannot collide with
+ * this one by hashing to the same number for a different purpose.
+ */
+async function defaultWatchlistId(userId: string) {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`watchlist:default:${userId}`}, 0))`);
+    const [w] = await tx.select().from(watchlists).where(eq(watchlists.userId, userId)).orderBy(desc(watchlists.isDefault)).limit(1);
+    if (w) return w.id;
+    const [created] = await tx.insert(watchlists).values({ userId, name: "Watchlist", isDefault: true }).returning();
+    return created.id;
+  });
+}
+
 export async function addWatchlistItem(userId: string, input: z.infer<typeof watchlistItemSchema>) {
   // Without this check a caller could pass someone else's watchlist id: the duplicate lookup below
   // would then find *their* row and hand it back, symbol and notes included.
   await assertOwned(userId, { watchlist: input.watchlistId });
-  let watchlistId = input.watchlistId;
-  if (!watchlistId) {
-    const [w] = await db.select().from(watchlists).where(eq(watchlists.userId, userId)).orderBy(desc(watchlists.isDefault)).limit(1);
-    watchlistId = w ? w.id : (await db.insert(watchlists).values({ userId, name: "Watchlist", isDefault: true }).returning())[0].id;
-  }
+  const watchlistId = input.watchlistId ?? (await defaultWatchlistId(userId));
   const onList = and(eq(watchlistItems.watchlistId, watchlistId), eq(watchlistItems.userId, userId), eq(watchlistItems.symbol, input.symbol));
   const [dup] = await db.select().from(watchlistItems).where(onList);
   if (dup) return dup;

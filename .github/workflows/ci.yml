@@ -17,18 +17,19 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # 20, not 45. The run before this bound was set took over 20 minutes in `pnpm test` and I read
-    # that as "the suite is simply slower on a CI runner" and loosened the bound. The very next run,
-    # on the same code, finished the whole job in 4m16s with the suite at 2m35s — so that run hung,
-    # and the inference was wrong. A bound should be proportionate to the observed time: 20 minutes
-    # is ~5x the measured job and will surface a repeat of that hang in minutes instead of an hour.
-    # The hang itself is recorded in BUG_REGISTER.md as a single unexplained occurrence.
+    # 20, not 45. The run that looked like it had hung for over 20 minutes had not: its conclusion was
+    # `cancelled`, its `pnpm test` step ran 2m17s, and the cancel came from this file's own
+    # `cancel-in-progress` when the next commit was pushed. Raising the bound to 45 was a fix for a
+    # defect that did not exist, and it is withdrawn (BUG-013). 20 minutes is ~5x the measured job,
+    # which is what a bound is for: catching a real stall in minutes rather than in an hour.
     timeout-minutes: 20
     services:
       postgres:
-        # NOTE: production runs PostgreSQL 18.6. This is 16, which is also what the project's
-        # local development database is. The mismatch is recorded in ARCHITECTURE_STATUS.md.
-        image: postgres:16
+        # The same major as production, which runs 18.6. It was 16 — and a feature present in one and
+        # not the other would have passed here and failed in production, or the reverse. The major is
+        # pinned rather than the patch so this does not go stale behind a managed database's own
+        # upgrades; the local development cluster is still 16, which is now the looser of the two.
+        image: postgres:18
         env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: personal_os_test }
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
@@ -37,14 +38,21 @@ jobs:
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/personal_os_test
       AUTH_SECRET: ci-secret-not-for-production
     steps:
-      - uses: actions/checkout@v4
+      # Every action is pinned to a commit, with the version it was in the comment. A tag like `v4` is
+      # a branch its owner can move, so `@v4` means "whatever that repository decides v4 is today" —
+      # fine until an account is compromised, which is how the tj-actions/changed-files supply-chain
+      # attack reached thousands of workflows in 2025. A SHA cannot be moved. Bumping one is a
+      # deliberate edit here, with CI to prove it still works.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # DO NOT add `with: { version: ... }` here. package.json carries `packageManager`, and
       # pnpm/action-setup refuses to start when a version is given in both places:
       #   "Multiple versions of pnpm specified ... Remove one of these versions"
       # It did, for 43 consecutive runs, and every step after it was skipped — so nothing in this
       # file had ever actually run. package.json is the single source of truth for the version.
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@d9184bf108216479bc5a137cc391f4d7b14c870b # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        # 22, matching the Node this project is developed and tested on locally. CI exists to
+        # disagree with the developer's machine about the code, not about the runtime.
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck

@@ -8,6 +8,13 @@
 set -euo pipefail
 : "${DATABASE_URL:?DATABASE_URL is required}"
 
+# Say which host is being dumped, so a backup in a log can be matched to a database. `pg_dump` only
+# reads, so unlike the migration path there is nothing here to gate — the risk this removes is a
+# backup of the wrong database being filed as a backup of the right one. The hostname only: never the
+# URL, which carries the password.
+HOST=$(printf '%s' "$DATABASE_URL" | sed -nE 's#^[a-z+]+://([^/@]*@)?([^:/?]+).*#\2#p')
+echo "Dumping ${HOST:-a local socket} with pg_dump ..."
+
 OUT="${1:-backups}"
 # A dump of an empty database is around 1 kB of header and TOC, so anything under this never
 # held data. Override for a deliberately tiny database.

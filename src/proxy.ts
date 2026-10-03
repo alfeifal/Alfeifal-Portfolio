@@ -1,4 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { PATHNAME_HEADER } from "@/server/auth/route-guards";
+import { isTrustedOrigin } from "@/server/security/origin";
 
 const SESSION_COOKIE = "pos_session";
 const PUBLIC_PATHS = ["/login", "/setup", "/api/auth/login", "/api/auth/signup", "/api/auth/status", "/api/cron", "/manifest.webmanifest", "/sw.js", "/icons", "/offline"];
@@ -11,18 +13,16 @@ function isPublic(pathname: string) {
  * Edge-level gate: unauthenticated requests never reach a private page or API.
  * The cookie is only checked for presence here; the real session lookup happens server-side.
  * Mutating requests must also pass the same-origin check (CSRF).
+ *
+ * It also stamps the request path onto a header, because a layout has no other way to read it, and
+ * the layout is the only thing that runs before the response is committed. See
+ * `server/auth/route-guards.ts` for why that matters (BUG-005).
  */
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  const method = req.method.toUpperCase();
 
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
-    const origin = req.headers.get("origin") ?? (req.headers.get("referer") ? safeOrigin(req.headers.get("referer")!) : null);
-    const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
-    const allowed = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-    const ok = origin && ((host && safeHost(origin) === host) || allowed.includes(origin));
-    if (!ok) return NextResponse.json({ error: "Cross-origin request blocked" }, { status: 403 });
-  }
+  // One rule, imported — not a second copy of it. See `server/security/origin.ts` (BUG-018).
+  if (!isTrustedOrigin(req)) return NextResponse.json({ error: "Cross-origin request blocked" }, { status: 403 });
 
   if (isPublic(pathname)) return NextResponse.next();
 
@@ -34,10 +34,19 @@ export function proxy(req: NextRequest) {
     url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
-  return NextResponse.next();
+  return forward(req);
 }
 
-function safeOrigin(u: string) { try { return new URL(u).origin; } catch { return null; } }
-function safeHost(u: string) { try { return new URL(u).host; } catch { return null; } }
+/**
+ * Passes the request through with its path attached.
+ *
+ * The header is always written, never merged: a client that sends one of its own has it replaced
+ * here, so a layout reading it cannot be told the request was for some other route.
+ */
+function forward(req: NextRequest) {
+  const headers = new Headers(req.headers);
+  headers.set(PATHNAME_HEADER, req.nextUrl.pathname);
+  return NextResponse.next({ request: { headers } });
+}
 
 export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico|icons/).*)"] };

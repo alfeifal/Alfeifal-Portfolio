@@ -3,14 +3,30 @@
 Defects found by inspection or by attacking a running build. Each one was reproduced before being
 written down. Security findings live in `SECURITY_REGISTER.md`; this file covers correctness.
 
+The table had stopped at BUG-006 while the entries below ran to BUG-019. It is complete now, and
+completing it is part of closing a bug, not a separate chore.
+
 | ID | Severity | Component | Status |
 |---|---|---|---|
 | BUG-001 | **CRITICAL** | Scheduled maintenance | Fixed `273e1af`, deployed |
 | BUG-002 | **HIGH** | Backups | Fixed `ad17110`, blocked on secrets |
 | BUG-003 | MEDIUM | Shared CRUD | Fixed, verified (= SEC-002) |
 | BUG-004 | MEDIUM | AI usage accounting | Fixed `273e1af`, dormant until `0007` |
-| BUG-005 | LOW | App-wide HTTP status | Open, deferred by decision |
-| BUG-006 | INFORMATIONAL | Scheduling | Open, external |
+| BUG-005 | LOW | HTTP status of a guarded page | **Fixed in 3.26**, measured in a browser |
+| BUG-006 | INFORMATIONAL | Scheduling | Open, external (platform behaviour) |
+| BUG-007 | **HIGH** | Concurrent writes | Fixed in code, **dormant until `0008`** |
+| BUG-008 | LOW | Watchlists | **Fixed in 3.26**, no migration needed |
+| BUG-009 | **HIGH** | `withAuth` | Fixed, verified (self-inflicted, ten minutes) |
+| BUG-010 | **HIGH** | CI | Fixed in 3.23, verified by the first green run |
+| BUG-011 | MEDIUM | Admin guards + vacuous tests | Fixed in 3.23 |
+| BUG-012 | MEDIUM | RSS ingestion | Fixed in 3.23; production effect **not measured** |
+| BUG-013 | — | CI duration | **WITHDRAWN** — my measurement error, not a defect |
+| BUG-014 | MEDIUM | Accessibility | Fixed, verified in a browser |
+| BUG-015 | LOW | Form labelling | Fixed in the same phase, before it shipped |
+| BUG-016 | **HIGH** | Notification generation | Fixed in 3.25, measured |
+| BUG-017 | MEDIUM | Account bootstrap | Fixed in 3.25, reproduced first |
+| BUG-018 | MEDIUM | CSRF rule written twice | **Fixed in 3.26** |
+| BUG-019 | LOW | TLS applied to local databases | **Fixed in 3.26** |
 
 ---
 
@@ -82,17 +98,45 @@ then checks the counter survived.
 
 ---
 
-## BUG-005 — `notFound()` answers 200
+## BUG-005 — a guarded page answered 200 with the not-found body
 
-**Severity:** LOW · **Status:** open, deferred by explicit decision
+**Severity:** LOW · **Status:** **fixed in phase 3.26**, measured before and after
 
-`notFound()` called from a dynamic Server Component returns HTTP 200 with the not-found body rather
-than 404. Reproduced on `/admin` and identically on `/projects/[id]`, so it is app-wide Next.js
-streaming behaviour and not specific to any route.
+A signed-in non-administrator asking for `/admin` got **HTTP 200** carrying the "Not found" page.
 
-Not a security issue: no content reaches an unauthorised viewer, and `/api/*` answers 403/404
-correctly. It is wrong for caching, crawling and monitoring. Fixing it touches the whole render
-path, so it was deferred rather than folded into an unrelated phase.
+**Root cause, established by experiment rather than inference.** The original entry blamed "app-wide
+Next.js streaming behaviour". It is narrower and entirely in this repository's hands:
+`src/app/(app)/loading.tsx` is a Suspense fallback above every page in the group, so the shell is
+flushed — committing the 200 — before any page body runs. `notFound()` can only set a status while the
+response is uncommitted. Measured against a production build with two real accounts:
+
+| request | with `loading.tsx` | that one file moved away | after the fix |
+|---|---|---|---|
+| `GET /admin`, signed in, not an admin | **200** | 404 | **404** |
+| `GET /admin`, signed in as an admin | 200 | 200 | 200 |
+| `GET /tasks`, signed in | 200 | 200 | 200 |
+| `GET /no-such-page` (no route matches) | 404 | 404 | 404 |
+
+**The original entry was also wrong on a second point.** It claimed the defect "reproduced identically
+on `/projects/[id]`". It does not: that route is a client component and never calls `notFound()` — a
+missing project shows an error panel, and 200 is the correct status for it. The only page in the app
+that calls `notFound()` is `/admin`.
+
+**Fix.** The guard that has to set the status now runs in the group's layout, which is the last thing
+to execute before the flush. `src/proxy.ts` stamps the request path onto a header — always overwriting
+it, so a client cannot claim a different route — and `src/server/auth/route-guards.ts` holds the one
+table of role-guarded prefixes. The page keeps its own `notFound()`: the table fixes the status, it is
+not the protection, and if the header is ever missing the page's check is what answers.
+
+Rejected alternatives: deleting `loading.tsx` (every route loses its skeleton for one route's status
+code); a `loading.tsx` per leaf route (24 files, and the 25th is forgotten); checking the role in the
+proxy (it runs on the edge and deliberately never touches the database).
+
+**Regression tests** — `tests/http-contract.test.ts`. Six of its ten pin this: the matcher's semantics
+including near-misses (`/administration` is not `/admin`), the proxy stamping and refusing to trust an
+incoming header, and a structural sweep asserting that **no** page calling `notFound()` sits under a
+Suspense fallback unless the layout covers its path. That last one is what stops the defect returning
+through a different route. Confirmed to fail against the unfixed code: 6 of 10.
 
 ---
 
@@ -167,17 +211,28 @@ four constraints, so the migration cannot fail on existing data.
 
 ## BUG-008 — two concurrent callers can create two default watchlists
 
-**Severity:** LOW · **Status:** open, recorded not fixed
+**Severity:** LOW · **Status:** **fixed in phase 3.26**, reproduced first
 
-`addWatchlistItem()` creates a default watchlist when the user has none, with the same
-check-then-insert shape as BUG-007. It is left unfixed because `bootstrapUserData()` creates a
-default watchlist for every account, so the branch is only reachable after a user deletes all of
-their watchlists and then adds two symbols simultaneously. The consequence is a duplicate list, not
-lost or misattributed data.
+`addWatchlistItem()` creates a default watchlist when the account has none, with the same
+check-then-insert shape as BUG-007. `bootstrapUserData()` gives every new account a list, so the branch
+only opens after the owner deletes all of them — which is why this was recorded and left.
 
-Fixing it needs a partial unique index on `(user_id) WHERE is_default`, which would also constrain
-the existing "set another list as default" path — more product surface than the defect justifies.
-Revisit if watchlist management grows.
+**Reproduced** from exactly that state: eight simultaneous adds against an account with no lists left
+**six** lists behind, every one of them flagged default. The symbols then scatter across them, so the
+UI shows one list holding a fraction of what was added. That is worse than the "duplicate list, not
+lost data" the original entry predicted.
+
+**Fix, and why it needed no migration.** A transaction-scoped advisory lock keyed on the account
+(`pg_advisory_xact_lock(hashtextextended('watchlist:default:<id>', 0))`) serialises just the
+create-if-missing and releases itself when the transaction ends. The index the original entry proposed
+would have to be partial — `(user_id) WHERE is_default` — which also constrains "make this other list
+the default", a path that clears one flag and sets another; and a migration in this repository waits
+behind a production gate, so the defect would have stayed live. The lock needs nothing but the code.
+`hashtextextended` is stable across sessions and servers, so two application instances agree.
+
+**Regression test** — `tests/concurrency.test.ts`, on its own account because it starts by deleting
+every list that account owns. Asserts one list, flagged default, with all eight symbols on it. Against
+the unfixed code it reports six.
 
 ---
 
@@ -490,6 +545,76 @@ trading account, and there is no button anywhere to finish the job.
 transaction and its own early return, and nesting would pull its hundred-plus inserts into this
 commit for no benefit. **Regression test** asserts a failed retry changes nothing; it fails against the
 unfixed version with `accounts: 2`.
+
+---
+
+## BUG-018 — the same-origin rule was written twice, and the copies had drifted
+
+**Severity:** MEDIUM · **Status:** fixed in phase 3.26, both divergences reproduced
+
+`src/proxy.ts` carried its own inline implementation of the CSRF check that `server/security/origin.ts`
+exports. This was deliberate — defence in depth, the rule applied at the edge and again in each
+mutating route. Two copies of a rule are only defence in depth while they agree. Probed directly:
+
+| request | `isTrustedOrigin` | the proxy's copy |
+|---|---|---|
+| `POST` with `Referer: not a url` | **threw `TypeError: Invalid URL`** | 403 |
+| `POST`, `Origin: https://x.example:443`, `ALLOWED_ORIGINS=https://x.example` | true | **403** |
+
+The throw is the one that mattered. Every mutating route calls `isTrustedOrigin` inside a `try` that
+ends at `errorResponse`, which turns an unrecognised `Error` into **500 Internal error** and writes it
+to the server log. So a malformed `Referer` header — which any client can send, and some privacy tools
+do — answered 500 where it should have answered 403. A predicate whose job is to return false must
+not throw.
+
+The second row is a configuration bug rather than a security hole: the proxy compared `ALLOWED_ORIGINS`
+entries as raw strings, so an entry written without its default port never matched an `Origin` that
+carried one, and the edge blocked a cross-origin client that the route would have accepted. It failed
+closed, which is why nobody noticed.
+
+**Fix.** One implementation. `origin.ts` parses every header through a helper that cannot throw, and
+normalises both sides to an origin before comparing, so a path or a default port cannot change the
+answer. `src/proxy.ts` imports it — it runs on the edge, and that module touches nothing but headers.
+
+**Regression tests** — eight in `tests/http-contract.test.ts`, each asserting both call paths agree:
+malformed `Referer`, malformed `Origin`, the default-port allow-list entry, an origin that is neither
+the host nor allowed, a write with no origin at all, the matching host, and `x-forwarded-host` winning
+over `host` as it must behind Vercel. One also asserts the proxy no longer contains the giveaways of a
+second implementation. Confirmed to fail against the two-copy code: 3 of 8.
+
+---
+
+## BUG-019 — the production TLS flag was applied to local databases
+
+**Severity:** LOW · **Status:** fixed in phase 3.26
+
+`DATABASE_SSL` describes the production connection, and every path that opened a connection applied it
+to whatever target it happened to have. None of this project's local databases speaks TLS — not the
+development cluster, not the CI service container, not the socket under `/tmp`. So in any checkout with
+`DATABASE_SSL=true` in `.env` — every real one — `pnpm db:migrate --test` died with:
+
+```
+DrizzleQueryError: Failed query: CREATE SCHEMA IF NOT EXISTS "drizzle"
+  cause: Error: The server does not support SSL connections
+```
+
+and `pnpm test` would have too. It had been invisible because `.claude/hooks/session-start.sh` passes
+`DATABASE_SSL=false` on the command line, and CI simply never sets the variable. A workaround in the
+harness had been standing in for the fix, which is how a defect survives: nothing is red.
+
+Found while extending the database-target guard, not while looking for it.
+
+**Fix.** `sslFor(url)` in `src/server/db/target.ts` decides from the target: never TLS to a local host
+or a unix socket, and otherwise exactly the old rule (`DATABASE_SSL=true`). Remote behaviour is
+unchanged. Verified by running `pnpm db:migrate --test` with no overrides at all, which now succeeds.
+
+Two smaller defects of the same family were fixed alongside it, both found by a test rather than by
+reading: `??` where `||` was meant, in `drizzle.config.ts` and in `src/server/db/index.ts`, so a
+variable that was *set but empty* became the connection string instead of falling through.
+
+**Regression tests** — two in `tests/operations.test.ts` covering local hosts, `127.0.0.1`, a libpq
+socket URL and the remote cases both ways, plus a structural one asserting no entry point keeps its own
+copy of the decision.
 
 ---
 

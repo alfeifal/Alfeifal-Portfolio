@@ -226,36 +226,62 @@ that table passes roughly 50,000 rows. Not before.
 
 ## Known architecture debt
 
-1. **The CSRF rule is implemented twice** (`proxy.ts` inline, `security/origin.ts` exported). Kept
-   as defence in depth, but they can diverge. No test currently pins them to the same behaviour.
-2. **Production runs a schema older than its code.** `0007` is unapplied, so the shared rate limiter
-   is silently in fallback and `/api/admin/usage` returns 500. `0008` is unapplied too, so the four
+Six of the eleven items recorded here were closed in phase 3.26. They are listed with what closed them,
+because an item that disappears from a list is indistinguishable from one that was quietly dropped.
+
+### Still open
+
+1. **Production runs a schema older than its code.** `0007` is unapplied, so the shared rate limiter is
+   silently in fallback and `/api/admin/usage` returns 500. `0008` is unapplied too, so the four
    concurrent-write duplicates of BUG-007 remain live in production; the fix is deployed but inert
-   without its constraints, by design.
-3. **`notFound()` answers 200** app-wide (BUG-005).
-4. **Native tool search is unvalidated** and off; the flag path exists but has never met a provider.
-5. **No per-account AI spend ceiling.** Usage is measured, not capped — deliberately, because until
+   without its constraints, by design. `0009` (the cascade indexes) queues behind both. All three wait
+   on a verified backup and explicit authorization — neither of which an agent can produce.
+2. **Native tool search is unvalidated** and off; the flag path exists but has never met a provider.
+3. **No per-account AI spend ceiling.** Usage is measured, not capped — deliberately, because until
    `0007` lands there is no history to justify a number.
-6. **`drizzle.config.ts` defaults to `DATABASE_URL`**, so any `drizzle-kit` command points at
-   production unless told otherwise. This has already caused one accidental (harmless) attempt.
-7. **The suite runs serially and takes ~2m35s in CI.** `vitest` is configured with
-   `fileParallelism: false`, which is necessary rather than incidental: the tests share one database
-   and several assert on counts that are global to it. Making it parallel means a database per file.
-   Not a problem at the current duration; the constraint is written down so the reason is not lost.
-   (The "hang" once recorded here was BUG-013 and has been withdrawn — that run was cancelled at
-   2m17s by this workflow's own `cancel-in-progress`.)
-8. **CI runs PostgreSQL 16; production runs 18.6.** The local development database is 16 too. Nothing
-   currently depends on the difference — migration `0008` needs 15+ and no further — but a feature
-   available on one and not the other would pass CI and fail production, or the reverse. Aligning CI
-   to 18 is the next step and was deliberately not bundled with the change that made CI run at all.
-9. **The GitHub Actions in use target Node 20**, which GitHub has deprecated; they are being forced
-   onto Node 24 with a warning today and will eventually stop. `actions/checkout`,
-   `pnpm/action-setup`, `actions/setup-node`, `actions/upload-artifact` all need a major bump, and
-   they are pinned to mutable tags rather than commit SHAs.
-10. **The assistant reads third-party text in a loop that can act** (SEC-007). `get_market_news`
-   returns RSS headlines verbatim, and low-risk tools — `remember_memory` among them — execute
-   without a confirmation step. Mitigated by labelling the content and by a system-prompt rule;
-   the mitigation is an instruction to a model and has never been tested against a real one.
-11. **The database-target guard covers one module, not a perimeter.** `src/server/db` refuses a
-   remote host from a non-production process (SEC-008), but `scripts/migrate.ts`, `scripts/backup.sh`
-   and anything using `neon()` or `pg` directly build their own connections and are unchecked.
+4. **The suite runs serially and takes ~3m in CI.** `vitest` is configured with
+   `fileParallelism: false`, which is necessary rather than incidental: the tests share one database and
+   several assert on counts that are global to it. Making it parallel means a database per file. Not a
+   problem at the current duration; the constraint is written down so the reason is not lost.
+5. **The assistant reads third-party text in a loop that can act** (SEC-007). `get_market_news` returns
+   RSS headlines verbatim, and low-risk tools — `remember_memory` among them — execute without a
+   confirmation step. Mitigated by labelling the content and by a system-prompt rule; the mitigation is
+   an instruction to a model and has never been tested against a real one.
+6. **The local development database is PostgreSQL 16; CI and production are 18.** CI was moved to 18 in
+   3.26, which is the pairing that matters — but the cluster this project is developed against is now
+   the odd one out, and a feature available on 18 and not 16 would fail locally and pass everywhere
+   else. The reverse, which is the dangerous direction, is closed.
+7. **`scripts/backup.sh` is not covered by the database-target guard**, because it cannot usefully be:
+   `pg_dump` only reads, and taking a backup of production is the point of the script. It now prints the
+   hostname it dumped, so a backup can be matched to a database, and that is the whole of the mitigation.
+
+### Closed in 3.26
+
+8. ~~**The CSRF rule is implemented twice**~~ — it is implemented once, in `server/security/origin.ts`,
+   and `src/proxy.ts` imports it. The two copies had already drifted in two ways, one of which answered
+   **500** to a malformed `Referer` instead of 403 (BUG-018). Eight tests now assert both call paths
+   agree, case by case.
+9. ~~**`notFound()` answers 200 app-wide**~~ — it was not app-wide and not inherent to Next.js: one
+   `loading.tsx` above the route group flushed the response before any page body could set a status
+   (BUG-005). The guard that has to set the status moved into the layout, which runs before the flush,
+   and a structural test now refuses any future page that relies on `notFound()` under a Suspense
+   fallback.
+10. ~~**`drizzle.config.ts` defaults to `DATABASE_URL`**~~ — it defaults to the local database. Reaching
+    `DATABASE_URL` needs `ALLOW_REMOTE_DB=1`, the same opt-in the application's own guard uses, so
+    `drizzle-kit push` can no longer be aimed at production by typing nothing.
+11. ~~**The database-target guard covers one module, not a perimeter**~~ — the rule lives in
+    `src/server/db/target.ts` and every entry point that opens a connection calls it:
+    `src/server/db/index.ts`, `scripts/migrate.ts`, `drizzle.config.ts`. `scripts/perf-bench.ts` never
+    needed it (its URLs are literals pointing at a disposable database, and it refuses any other name).
+    `scripts/backup.sh` is item 7 above. Seven tests run the real entry points in child processes,
+    because a guard is only tested where the mistake can actually be made.
+12. ~~**The GitHub Actions target deprecated Node 20 and are pinned to mutable tags**~~ — every action in
+    every workflow is pinned to a 40-character commit with its version in a trailing comment
+    (`actions/checkout` v7.0.1, `pnpm/action-setup` v6.1.0, `actions/setup-node` v7.0.0,
+    `actions/upload-artifact` v7.0.1). A tag is a branch its owner can move; a commit is not. A test
+    sweeps all three workflows and fails on any `uses:` that is not a commit, or that carries no version
+    comment.
+13. ~~**CI runs PostgreSQL 16; production runs 18.6**~~ — CI runs `postgres:18`, the same major. The
+    major is pinned rather than the patch, because a managed database moves on its own. Verified by CI
+    itself; there is no PostgreSQL 18 available in this development environment, so that is a **CI
+    measurement**, not a local one.

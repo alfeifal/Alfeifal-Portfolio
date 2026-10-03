@@ -111,6 +111,35 @@ describe("concurrent writes settle on a single row", () => {
     expect(rows).toHaveLength(1);
     expect(results.every((r) => r.status === "fulfilled")).toBe(true);
   });
+
+  /*
+   * BUG-008, phase 3.26. The test above passes a watchlist id, so it never reaches the branch that
+   * *creates* the default list. That branch is a plain select-then-insert, and it is reachable: an
+   * account that has deleted all of its lists and then adds two symbols at once gets two lists, both
+   * marked default. It needs its own account, because it starts by removing every list this one owns.
+   */
+  it("addWatchlistItem() creates exactly one default list when the account has none", async () => {
+    const other = await createTestUser();
+    try {
+      await db.delete(watchlists).where(eq(watchlists.userId, other.id));
+      // Warm this account's path too: the fan-out has to overlap, not queue.
+      await Promise.all(Array.from({ length: N }, () => db.execute(sql`select 1`)));
+      const results = await fanOut((i) => addWatchlistItem(other.id, { symbol: `SYM${i}`, assetClass: "stock" }));
+
+      const lists = await db.select({ id: watchlists.id, isDefault: watchlists.isDefault }).from(watchlists)
+        .where(eq(watchlists.userId, other.id));
+      expect(lists, "N simultaneous first adds must agree on one list").toHaveLength(1);
+      expect(lists[0].isDefault).toBe(true);
+      // And every symbol must have landed, on that one list.
+      const items = await db.select({ id: watchlistItems.id, watchlistId: watchlistItems.watchlistId })
+        .from(watchlistItems).where(eq(watchlistItems.userId, other.id));
+      expect(items).toHaveLength(N);
+      expect(new Set(items.map((i) => i.watchlistId)).size).toBe(1);
+      expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+    } finally {
+      await deleteTestUser(other.id);
+    }
+  });
 });
 
 describe("the constraints behind those writes, seen from the API", () => {

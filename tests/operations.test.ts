@@ -55,11 +55,22 @@ describe("the cron endpoint is reachable by the schedulers that call it", () => 
     expect(src).toMatch(/export const GET\b/);
   });
 
-  it("a scheduler's GET is not blocked by the proxy's origin check", () => {
-    // The check applies only to mutating methods, which is why the fix was the verb and not an
-    // exemption: nothing else gained a way past it.
-    expect(proxy).toContain('!["GET", "HEAD", "OPTIONS"].includes(method)');
-    expect(proxy).toContain('"/api/cron"');
+  it("a scheduler's GET is not blocked by the proxy's origin check", async () => {
+    /*
+     * Called, not read. This used to assert that proxy.ts contained a particular line of source, and
+     * it broke the moment that line moved into `server/security/origin.ts` — where the identical rule
+     * now lives once instead of twice (BUG-018). The source had changed; the contract had not. What
+     * the schedulers rely on is the behaviour: a bare GET with no Origin at all, carrying no session,
+     * reaches the route.
+     */
+    const { proxy: run } = await import("@/proxy");
+    const { NextRequest } = await import("next/server");
+    const res = run(new NextRequest(new URL("http://localhost:3000/api/cron?scope=daily")));
+    expect(res.status, "a scheduler sends no Origin and holds no cookie").not.toBe(403);
+    expect(res.status).not.toBe(401);
+    expect(proxy).toContain('"/api/cron"'); // and the path is public, so the cookie gate is skipped too
+    // The exemption is the verb, not the path: a POST from nowhere is still refused.
+    expect(run(new NextRequest(new URL("http://localhost:3000/api/cron"), { method: "POST" })).status).toBe(403);
   });
 
   it("compares the secret in constant time and never reveals it", () => {
@@ -865,6 +876,37 @@ describe("the CI workflow is configured so it can actually run", () => {
     }
   });
 
+  /*
+   * Phase 3.26. Both of these were recorded as architecture debt and both are the kind that only
+   * bites once, badly.
+   */
+  it("pins every action to a commit, not to a tag its owner can move", () => {
+    const offenders: string[] = [];
+    for (const f of ["ci.yml", "backup.yml", "maintenance.yml"]) {
+      const y = readFileSync(`.github/workflows/${f}`, "utf8");
+      for (const line of y.split("\n")) {
+        const m = /^\s*-?\s*uses:\s*(\S+)/.exec(line);
+        if (!m) continue;
+        const ref = m[1];
+        // Local actions (./…) have nothing to pin; everything else must carry a full commit id.
+        if (ref.startsWith("./")) continue;
+        if (!/@[0-9a-f]{40}$/.test(ref)) offenders.push(`${f}: ${ref}`);
+        // And the comment that says which version that commit is, or nobody can read the file.
+        else if (!/#\s*v\d+\.\d+\.\d+/.test(line)) offenders.push(`${f}: ${ref} has no version comment`);
+      }
+    }
+    expect(offenders, "a movable tag means the workflow runs whatever that repository decides today").toEqual([]);
+  });
+
+  it("runs the same major version of PostgreSQL as production", () => {
+    // Production (Neon) is 18.6. CI was on 16, so a feature present in one and not the other would
+    // have passed here and failed there — `NULLS NOT DISTINCT` in migration 0008 needs 15+, and the
+    // next one might need 17. The patch is deliberately not pinned: a managed database moves.
+    const image = /image:\s*postgres:(\S+)/.exec(readFileSync(".github/workflows/ci.yml", "utf8"));
+    expect(image, "the CI service must declare a postgres image").toBeTruthy();
+    expect(Number(image![1].split(".")[0])).toBe(18);
+  });
+
   it("no workflow claims the jobs behind the cron are all idempotent", () => {
     // They are not, until migration 0008 is applied: see BUG-007. The claim was in two places.
     for (const f of ["maintenance.yml"]) {
@@ -1001,4 +1043,122 @@ describe("the batched news ingestion is correct, not just fewer statements", () 
     // 400 rows in 200-row batches plus the retention delete: single digits, not 400.
     expect(n).toBeLessThan(10);
   }, 60_000);
+});
+
+/**
+ * Phase 3.26 — the same guard, now at every entry point instead of one.
+ *
+ * SEC-008's fix lived inside `src/server/db/index.ts`, and the tests above cover that module
+ * thoroughly. They also only ever covered that module. Two things opened a connection without going
+ * near it:
+ *
+ *   `scripts/migrate.ts`   builds its own `Pool`, so `pnpm db:migrate` in a checkout whose `.env`
+ *                          points at Neon migrated production, silently, with no mention of the host.
+ *   `drizzle.config.ts`    defaulted to `DATABASE_URL`, so `drizzle-kit push` — which diffs the schema
+ *                          and applies the difference with no migration file — was aimed at production
+ *                          out of the box. One absent-minded command, one unreviewed schema change.
+ *
+ * The rule now lives in `src/server/db/target.ts` and all three call it. These tests run the real
+ * entry points in child processes, because that is the only place the mistake can be made.
+ */
+describe("every entry point that opens a connection is guarded, not just the app's module", () => {
+  const REMOTE = "postgresql://u:hunter2@db.invalid.example:5432/x";
+  const run = (cmd: string, args: string[], env: Record<string, string>) =>
+    execFileAsync(cmd, args, { cwd: process.cwd(), env: { ...process.env, ...env }, timeout: 90_000 })
+      .then((r) => ({ ok: true, out: `${r.stdout}${r.stderr}` }))
+      .catch((e: { stdout?: string; stderr?: string; message?: string }) => ({ ok: false, out: `${e.stdout ?? ""}${e.stderr ?? ""}${e.message ?? ""}` }));
+
+  it("the migration script refuses a remote target, naming the host and nothing else", async () => {
+    const r = await run("npx", ["tsx", "scripts/migrate.ts"], { NODE_ENV: "", DATABASE_URL: REMOTE, ALLOW_REMOTE_DB: "" });
+    expect(r.ok).toBe(false);
+    expect(r.out).toMatch(/Refusing to apply migrations to/);
+    expect(r.out).toContain("db.invalid.example");
+    expect(r.out).not.toContain("hunter2");
+    // And it must not have started: the schema table is created before the first migration runs.
+    expect(r.out).not.toMatch(/Applying migrations/);
+  }, 120_000);
+
+  it("the migration script says which host it is about to change, once allowed", async () => {
+    const r = await run("npx", ["tsx", "scripts/migrate.ts"], { NODE_ENV: "", DATABASE_URL: REMOTE, ALLOW_REMOTE_DB: "1" });
+    // It gets past the guard and dies on DNS, which is the proof: the refusal was the guard, not the network.
+    expect(r.out).toMatch(/Applying migrations from \.\/drizzle \(pg\) to db\.invalid\.example/);
+    expect(r.out).not.toMatch(/Refusing/);
+    expect(r.out).not.toContain("hunter2");
+  }, 120_000);
+
+  /** Reads the url drizzle-kit would be handed, and reports only its host. */
+  const drizzleTarget = async (env: Record<string, string>) => {
+    const script = `/tmp/drizzlecfg-${uniq()}.mjs`;
+    writeFileSync(script, `
+      try {
+        const cfg = (await import("${process.cwd()}/drizzle.config.ts")).default;
+        const url = cfg.dbCredentials.url;
+        console.log(JSON.stringify({ host: new URL(url).hostname }));
+      } catch (e) {
+        console.log(JSON.stringify({ error: String(e.message ?? e) }));
+      }
+      process.exit(0);
+    `);
+    const r = await run("npx", ["tsx", script], env);
+    return JSON.parse(r.out.trim().split("\n").pop()!) as { host?: string; error?: string };
+  };
+
+  it("drizzle-kit is not pointed at DATABASE_URL by default", async () => {
+    const t = await drizzleTarget({ NODE_ENV: "", DATABASE_URL: REMOTE, TEST_DATABASE_URL: "", ALLOW_REMOTE_DB: "" });
+    // This is the whole defect: it used to come back as db.invalid.example.
+    expect(t.host).toBe("localhost");
+  }, 120_000);
+
+  it("drizzle-kit follows DATABASE_URL only when asked explicitly", async () => {
+    const t = await drizzleTarget({ NODE_ENV: "", DATABASE_URL: REMOTE, ALLOW_REMOTE_DB: "1" });
+    expect(t.host).toBe("db.invalid.example");
+  }, 120_000);
+
+  it("an explicit remote DRIZZLE_DATABASE_URL still needs the opt-in", async () => {
+    const t = await drizzleTarget({ NODE_ENV: "", DRIZZLE_DATABASE_URL: REMOTE, ALLOW_REMOTE_DB: "" });
+    expect(t.host).toBeUndefined();
+    expect(t.error).toMatch(/Refusing to point drizzle-kit at/);
+    expect(t.error).not.toContain("hunter2");
+  }, 120_000);
+
+  it("the backup names the database it dumped, and never the URL", async () => {
+    const r = await run("bash", ["scripts/backup.sh", `/tmp/backup-probe-${uniq()}`], { DATABASE_URL: REMOTE });
+    // pg_dump then fails on DNS; what matters is what was printed first.
+    expect(r.out).toMatch(/Dumping db\.invalid\.example with pg_dump/);
+    expect(r.out).not.toContain("hunter2");
+  }, 120_000);
+
+  it("no entry point carries its own copy of the SSL decision any more", () => {
+    // BUG-019: each copy applied the production TLS flag to whatever target it had, and no local
+    // database here speaks TLS. One of them is allowed to know the rule.
+    const owners = ["src/server/db/index.ts", "scripts/migrate.ts", "drizzle.config.ts"]
+      .filter((f) => /DATABASE_SSL/.test(readFileSync(f, "utf8")));
+    expect(owners).toEqual([]);
+    expect(readFileSync("src/server/db/target.ts", "utf8")).toContain("DATABASE_SSL");
+  });
+});
+
+describe("TLS is decided by the target, not by a flag meant for production", () => {
+  const saved = process.env.DATABASE_SSL;
+  afterEach(() => { if (saved === undefined) delete process.env.DATABASE_SSL; else process.env.DATABASE_SSL = saved; });
+
+  it("never negotiates TLS with a local database, whatever DATABASE_SSL says", async () => {
+    const { sslFor } = await import("@/server/db/target");
+    process.env.DATABASE_SSL = "true";
+    // This is what broke `pnpm db:migrate --test`: "The server does not support SSL connections".
+    expect(sslFor("postgres://postgres@localhost:5433/personal_os_test")).toBeUndefined();
+    expect(sslFor("postgres://postgres@127.0.0.1:5432/x")).toBeUndefined();
+    // A libpq socket URL has no hostname at all, and a unix socket cannot be remote.
+    expect(sslFor("postgres://postgres@localhost/x?host=/tmp")).toBeUndefined();
+  });
+
+  it("still negotiates TLS with a remote database when DATABASE_SSL=true, and not otherwise", async () => {
+    const { sslFor } = await import("@/server/db/target");
+    process.env.DATABASE_SSL = "true";
+    expect(sslFor("postgres://u:p@ep-x.eu-central-1.aws.neon.tech/db")).toEqual({ rejectUnauthorized: false });
+    process.env.DATABASE_SSL = "false";
+    expect(sslFor("postgres://u:p@ep-x.eu-central-1.aws.neon.tech/db")).toBeUndefined();
+    delete process.env.DATABASE_SSL;
+    expect(sslFor("postgres://u:p@ep-x.eu-central-1.aws.neon.tech/db")).toBeUndefined();
+  });
 });
