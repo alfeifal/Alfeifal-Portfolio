@@ -25,3 +25,30 @@ export const V = {
 } as const;
 
 export const STAGGER = { fast: 0.03, base: 0.05, slow: 0.08 } as const;
+
+/**
+ * How long a whole list is allowed to take to finish arriving, in seconds.
+ *
+ * A fixed per-item gap makes the entrance as long as the list. `/news` asks for 120 items at a 20 ms
+ * gap, so the last row only started fading in at 2.4 s — measured, and measured twice: an axe run that
+ * sampled the page at 1.5 s reported 18 colour-contrast failures that were simply rows still at low
+ * opacity. The page is not broken, but a row that takes two and a half seconds to become readable is
+ * not "unnoticeable", which is the rule this motion language sets for itself.
+ *
+ * Motion's `reducedMotion="user"` does not rescue it either: by design it drops transforms and keeps
+ * opacity, because a fade is not a vestibular trigger. So the stagger plays for everybody.
+ */
+export const STAGGER_BUDGET = 0.4;
+
+/**
+ * The per-item gap to actually use, given how many items there are.
+ *
+ * Short lists keep the gap they asked for — the stagger is the point, and 8 rows at 50 ms is 350 ms.
+ * Long lists compress so the last item still starts within the budget. Bounding the total rather than
+ * capping the count means no list has an invisible tail, and no call site has to know how long it is.
+ */
+export function staggerGap(gap: number, count: number): number {
+  if (count <= 1 || gap <= 0) return gap;
+  const lastStartsAt = (count - 1) * gap;
+  return lastStartsAt <= STAGGER_BUDGET ? gap : STAGGER_BUDGET / (count - 1);
+}

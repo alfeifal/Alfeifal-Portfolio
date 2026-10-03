@@ -1,7 +1,7 @@
 "use client";
 import { LazyMotion, MotionConfig, domAnimation, m, AnimatePresence, useReducedMotion, useInView } from "motion/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { DUR, EASE, STAGGER, T, V } from "./tokens";
+import { Children, useEffect, useRef, useState, type ReactNode } from "react";
+import { DUR, EASE, STAGGER, T, V, staggerGap } from "./tokens";
 import { cubicBezier } from "./ease";
 
 export { m, AnimatePresence, useReducedMotion };
@@ -32,8 +32,10 @@ export function FadeIn({ children, className, variant = "rise", delay = 0, as = 
 /** Parent that staggers its `StaggerItem` children. */
 export function Stagger({ children, className, gap = STAGGER.base, delay = 0, as = "div" }: { children: ReactNode; className?: string; gap?: number; delay?: number; as?: "div" | "ul" | "section" | "ol" }) {
   const Tag = m[as];
+  // The gap is compressed for a long list so the whole entrance stays inside STAGGER_BUDGET; see there.
+  const step = staggerGap(gap, Children.count(children));
   return (
-    <Tag className={className} initial="hidden" animate="visible" variants={{ hidden: {}, visible: { transition: { staggerChildren: gap, delayChildren: delay } } }}>
+    <Tag className={className} initial="hidden" animate="visible" variants={{ hidden: {}, visible: { transition: { staggerChildren: step, delayChildren: delay } } }}>
       {children}
     </Tag>
   );
@@ -59,8 +61,9 @@ export function PageTransition({ children, id }: { children: ReactNode; id: stri
 /** Animated list: items enter with a stagger and exit smoothly when removed. Use `key` on children. */
 export function AnimatedList({ children, className, as = "ul" }: { children: ReactNode; className?: string; as?: "ul" | "div" | "ol" }) {
   const Tag = m[as];
+  const step = staggerGap(STAGGER.fast, Children.count(children));
   return (
-    <Tag className={className} initial="hidden" animate="visible" variants={{ hidden: {}, visible: { transition: { staggerChildren: STAGGER.fast } } }}>
+    <Tag className={className} initial="hidden" animate="visible" variants={{ hidden: {}, visible: { transition: { staggerChildren: step } } }}>
       <AnimatePresence initial={false}>{children}</AnimatePresence>
     </Tag>
   );

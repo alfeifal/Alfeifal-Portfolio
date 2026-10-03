@@ -23,8 +23,16 @@
  *
  * REDUCED=1 emulates `prefers-reduced-motion: reduce`, and you want it. Without it axe measures the
  * page mid-entrance-animation and reports a dozen contrast failures that are opacity frames of one
- * element fading in — that is how this audit first mis-read /news. SETTLE is how long to wait after
- * `readyState === "complete"`; lists with a staggered entrance need several seconds without REDUCED.
+ * element fading in — that is how this audit first mis-read /news.
+ *
+ * REDUCED=1 IS NOT ENOUGH ON ITS OWN, and the note that used to be here said otherwise, which cost a
+ * second false finding. Motion's `reducedMotion="user"` drops transforms and **keeps opacity** — a fade
+ * is not a vestibular trigger — so a staggered list still fades in for everybody. Give SETTLE enough
+ * time for the longest list on the route to finish arriving: at SETTLE=1500 `/news` reported 18 contrast
+ * failures that were rows still at low opacity, and at 5000 it reported none. The app now bounds a
+ * list's entrance to ~0.4 s (`STAGGER_BUDGET`), so 2500 is ample — but if a route ever disagrees with
+ * this script, raise SETTLE and see whether the finding survives before believing it.
+ *
  * DARK=1 audits the dark theme, and each result says whether the theme was actually applied, so a
  * silent failure to apply it cannot pass as a clean run.
  *
@@ -36,13 +44,38 @@
  * found 2. Trust `violations`; treat the rest as a hint.
  */
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync, statSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
-// Claude Code on the web ships Chromium at PLAYWRIGHT_BROWSERS_PATH; CHROME overrides it anywhere else.
-const BROWSER = process.env.CHROME
-  ?? (process.env.PLAYWRIGHT_BROWSERS_PATH ? `${process.env.PLAYWRIGHT_BROWSERS_PATH}/chromium/chrome-linux/chrome` : null)
-  ?? "/usr/bin/chromium";
+/**
+ * Finds Chromium, in the order of what is most likely to be right.
+ *
+ * This used to be one guessed path, `$PLAYWRIGHT_BROWSERS_PATH/chromium/chrome-linux/chrome`, and it
+ * broke on a container where `…/chromium` is a symlink to the binary itself rather than to its
+ * directory — `spawn ENOTDIR`, which says nothing about what was wrong. The layout of that directory
+ * is not this script's to guarantee, so it tries the shapes it has seen and says what it looked for.
+ */
+function findBrowser() {
+  const isExecutable = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
+  const root = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  const candidates = [
+    process.env.CHROME,
+    root && `${root}/chromium`,                               // a symlink straight to the binary
+    root && `${root}/chromium/chrome-linux/chrome`,            // a directory per channel
+    ...(root ? globSync(`${root}/chromium-*/chrome-linux/chrome`).sort().reverse() : []), // versioned
+    ...(root ? globSync(`${root}/chromium_headless_shell-*/chrome-linux/headless_shell`).sort().reverse() : []),
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
+  ].filter(Boolean);
+  const found = candidates.find(isExecutable);
+  if (!found) {
+    console.error(`No Chromium found. Tried, in order:\n${candidates.map((c) => `  ${c}`).join("\n")}\nSet CHROME to the binary.`);
+    process.exit(1);
+  }
+  return found;
+}
+const BROWSER = findBrowser();
 const AXE = readFileSync(process.env.AXE_PATH, "utf8");
 const BASE = process.env.BASE_URL;
 const COOKIE = process.env.SESSION_COOKIE; // "name=value"

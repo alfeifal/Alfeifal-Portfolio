@@ -7,7 +7,7 @@ external prerequisite is missing. Nothing is marked from a previous report.
 ## Current position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphase in progress:** 3.27 (full regression / release readiness); 3.21–3.26 complete
+- **Subphase in progress:** phase 3 is COMPLETE through 3.27; next is **phase 4**, with the production gate still standing
 - **Commit:** see `SESSION_CHECKPOINT.md`
 
 ## Phase 3
@@ -33,11 +33,17 @@ external prerequisite is missing. Nothing is marked from a previous report.
 | **3.24** UX / accessibility | COMPLETE | BUG-014/015 fixed; axe-core over 25 routes in light, dark and phone width, zero violations; `scripts/a11y-audit.mjs` |
 | **3.25** performance & scalability | COMPLETE | BUG-016/017 fixed, BUG-013 withdrawn; `scripts/perf-bench.ts`; migration `0009` from measured evidence; the six `user_id` indexes measured and deliberately not added |
 | 3.26 bug & debt remediation | COMPLETE | BUG-005 and BUG-008 fixed; BUG-018 and BUG-019 found and fixed; 6 of the 11 architecture-debt items closed; `tests/http-contract.test.ts` |
-| 3.27 full regression / release readiness | **NEXT** | Cannot pass while the production blockers stand; what it *can* do is establish exactly what is verified and what is dormant |
+| 3.27 full regression / release readiness | COMPLETE | `RELEASE_READINESS.md`: every claim against its strongest evidence, labelled local / CI / disposable-DB / production. Does not pass, by design — three migrations are unapplied. BUG-020 found and fixed on the way |
 
 ## Phases 4–12
 
-NOT STARTED. Phase 3 must reach a trustworthy state first, which is the stated purpose of phase 3.
+Phase 3 is complete. `RELEASE_READINESS.md` states what that does and does not mean: the application is
+correct and tested, and it runs against a schema older than itself, because `0007`, `0008` and `0009`
+wait on a backup and written authorization that only the owner can give.
+
+Phase 4 can proceed — nothing in it depends on those migrations — but every phase from here inherits the
+gate, and the dormant-in-production list in `RELEASE_READINESS.md` is the thing to re-read before
+claiming any of it works for real.
 
 ## Blocked work, and exactly what unblocks it
 
@@ -61,8 +67,8 @@ An agent may not set secrets, so these will not clear themselves and are not ret
                                         └──> AI usage measurable ──> any future quota
                                         └──> 0008 ──> BUG-007 actually fixed in production
 SEC-003 (secrets) ──> frequent maintenance runs ──> BUG-006 re-measurable
-3.20 ──> 3.21 ──> 3.22 ──> 3.23 ──> 3.24 ──> 3.25 ──> 3.26 ──> 3.27
-                                                                  ▲ here
+3.20 ──> 3.21 ──> 3.22 ──> 3.23 ──> 3.24 ──> 3.25 ──> 3.26 ──> 3.27 ──> phase 4
+                                                                           ▲ here
 ```
 
 Everything below 3.24 is independent of the production blockers and can proceed. 3.21, 3.22 and 3.23

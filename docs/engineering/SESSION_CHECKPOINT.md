@@ -21,11 +21,14 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
 ## Position
 
 - **Phase 3 — stabilization and consolidation**
-- **Subphases 3.21 through 3.26 — COMPLETE**; the SEC-008 incident is closed
-- **Next action: start 3.27 — full regression and release readiness.** It cannot *pass* while the
-  production blockers stand, and that is the point of running it: establish exactly what is verified,
-  what is dormant in production, and what is only claimed. 3.19.2B, 3.19.3, `0007`, `0008` and `0009`
-  stay blocked; do not retry them, and do not ask for secrets in chat.
+- **Phase 3 is COMPLETE through 3.27**; the SEC-008 incident is closed
+- **Next action: phase 4.** Read `RELEASE_READINESS.md` first — it is new in 3.27 and it is the one
+  document that says, claim by claim, whether the evidence is local, CI, disposable-database or
+  production. Nothing in phase 4 depends on the blocked migrations, but every claim about production
+  does. 3.19.2B, 3.19.3, `0007`, `0008` and `0009` stay blocked; do not retry them, and do not ask for
+  secrets in chat.
+- **Production deploys from this branch** — it is the repository's default branch — so the code reaches
+  production on the next build. The *schema* does not: that is the whole of the gate.
 - 3.26 closed BUG-005 and BUG-008 and found two more on the way (BUG-018, BUG-019). Six of the eleven
   architecture-debt items are closed; the five that remain are in `ARCHITECTURE_STATUS.md` with the
   reason each one is still open, and three of them are the production gate.
@@ -37,7 +40,8 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
 
 - Branch `claude/personal-operating-system-nuoesg`
 - `0784150` → `8c0531d` (3.21) → `e2d03b3` (3.22) → `642c421`, `a72c985` (chores) → `77c7665`
-  (incident docs) → `1c71001`, `05999d7` (3.23) → `7420655` (3.24) → `291107c` (3.25) → the 3.26 commit
+  (incident docs) → `1c71001`, `05999d7` (3.23) → `7420655` (3.24) → `291107c` (3.25) → `5e53285`
+  (3.26) → the 3.27 commit
 - **CI is green.** Run 45 was the first run in this project's history to reach the suite at all; every
   run since has passed, including run 47 on the 3.25 commit (test 180s, job well inside the 20-minute
   bound). Working tree clean, local == origin.
@@ -84,8 +88,10 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
    reproduced from the state that makes it reachable — eight concurrent first adds left **six** default
    watchlists — and fixed with a transaction-scoped advisory lock, so no migration and nothing waiting
    on the production gate. **BUG-018**, found while unifying the CSRF rule: the two copies had drifted,
-   and a malformed `Referer` made `isTrustedOrigin` *throw*, which `errorResponse` turned into **500**
-   instead of 403. **BUG-019**, found while extending the database guard: `DATABASE_SSL` was applied to
+   and a malformed `Referer` made `isTrustedOrigin` *throw*, which `errorResponse` would turn into 500.
+   I first wrote that up as live and it is not: measured against a running build, the edge copy answers
+   403 to every shape that would reach the throw, so it was latent. Severity corrected down to LOW in
+   the register, with the probe that shows it. **BUG-019**, found while extending the database guard: `DATABASE_SSL` was applied to
    local targets, so `pnpm db:migrate --test` could only work because the session hook passed
    `DATABASE_SSL=false` — a harness workaround standing in for a fix. Also: the database-target guard is
    now a perimeter rather than one module, `drizzle-kit` no longer defaults to production, and a 3.23

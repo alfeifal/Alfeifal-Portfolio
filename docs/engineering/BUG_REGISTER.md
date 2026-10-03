@@ -25,8 +25,9 @@ completing it is part of closing a bug, not a separate chore.
 | BUG-015 | LOW | Form labelling | Fixed in the same phase, before it shipped |
 | BUG-016 | **HIGH** | Notification generation | Fixed in 3.25, measured |
 | BUG-017 | MEDIUM | Account bootstrap | Fixed in 3.25, reproduced first |
-| BUG-018 | MEDIUM | CSRF rule written twice | **Fixed in 3.26** |
+| BUG-018 | LOW | CSRF rule written twice | **Fixed in 3.26**; latent, not live — see the entry |
 | BUG-019 | LOW | TLS applied to local databases | **Fixed in 3.26** |
+| BUG-020 | LOW | Unbounded list entrance | **Fixed in 3.27**, measured in a browser |
 
 ---
 
@@ -550,7 +551,8 @@ unfixed version with `accounts: 2`.
 
 ## BUG-018 — the same-origin rule was written twice, and the copies had drifted
 
-**Severity:** MEDIUM · **Status:** fixed in phase 3.26, both divergences reproduced
+**Severity:** LOW (**corrected down from MEDIUM** — see *Reachability*) · **Status:** fixed in phase
+3.26, both divergences reproduced
 
 `src/proxy.ts` carried its own inline implementation of the CSRF check that `server/security/origin.ts`
 exports. This was deliberate — defence in depth, the rule applied at the edge and again in each
@@ -561,16 +563,34 @@ mutating route. Two copies of a rule are only defence in depth while they agree.
 | `POST` with `Referer: not a url` | **threw `TypeError: Invalid URL`** | 403 |
 | `POST`, `Origin: https://x.example:443`, `ALLOWED_ORIGINS=https://x.example` | true | **403** |
 
-The throw is the one that mattered. Every mutating route calls `isTrustedOrigin` inside a `try` that
-ends at `errorResponse`, which turns an unrecognised `Error` into **500 Internal error** and writes it
-to the server log. So a malformed `Referer` header — which any client can send, and some privacy tools
-do — answered 500 where it should have answered 403. A predicate whose job is to return false must
-not throw.
+Every mutating route calls `isTrustedOrigin` inside a `try` that ends at `errorResponse`, which turns
+an unrecognised `Error` into **500 Internal error** and logs it. A predicate whose job is to return
+false must not throw.
 
-The second row is a configuration bug rather than a security hole: the proxy compared `ALLOWED_ORIGINS`
+### Reachability — I first wrote this up as worse than it was
+
+The original entry, and the commit message with it, said a malformed `Referer` "answered 500 where it
+should have answered 403". **Measured against a running build, it did not.** Every shape that would
+have reached the throw is rejected one layer earlier:
+
+| `POST /api/tasks` with | answer |
+|---|---|
+| `Referer: not a url` | 403 at the edge |
+| `Origin: ://` | 403 at the edge |
+| no `Origin` and no `Referer` | 403 at the edge |
+| `Origin: http://localhost:3322` (matching) | 201 — the route never consults `Referer` |
+
+The proxy's own copy of the rule ran first and refused exactly the requests that would have made the
+route's copy throw, and the matcher routes every `/api/*` path through it. So the 500 was **latent, not
+live**: the duplication's one redeeming feature was that it hid its own defect. That is still worth
+fixing — a latent throw inside a security predicate is one refactor away from being reachable, and the
+next person to call `isTrustedOrigin` from somewhere new would have found it — but the severity is LOW,
+not MEDIUM, and this entry says so rather than leaving the stronger claim standing.
+
+The second row is a configuration divergence, also not live: the proxy compared `ALLOWED_ORIGINS`
 entries as raw strings, so an entry written without its default port never matched an `Origin` that
-carried one, and the edge blocked a cross-origin client that the route would have accepted. It failed
-closed, which is why nobody noticed.
+carried one, and the edge would have blocked a cross-origin client the route would have accepted. It
+fails closed, and `ALLOWED_ORIGINS` is currently unset in production, so nothing was being blocked.
 
 **Fix.** One implementation. `origin.ts` parses every header through a helper that cannot throw, and
 normalises both sides to an origin before comparing, so a path or a default port cannot change the
@@ -615,6 +635,47 @@ variable that was *set but empty* became the connection string instead of fallin
 **Regression tests** — two in `tests/operations.test.ts` covering local hosts, `127.0.0.1`, a libpq
 socket URL and the remote cases both ways, plus a structural one asserting no entry point keeps its own
 copy of the decision.
+
+---
+
+## BUG-020 — a list's entrance was as long as the list
+
+**Severity:** LOW (perceived performance; no accessibility violation) · **Status:** fixed in phase 3.27,
+measured in a browser before and after
+
+`/news` requests 120 items and staggers them 20 ms apart, so the last row only *started* fading in at
+2.4 s. Nothing was broken, but a row that takes two and a half seconds to become readable contradicts
+the rule the motion language sets for itself — "fast, natural, unnoticeable" — and it is the same
+unbounded shape as BUG-016: a per-item cost with no cap on the number of items.
+
+**How it was found, which is the interesting part.** It was not found by looking. The 3.27 accessibility
+re-audit reported 18–21 colour-contrast failures on `/news` that 3.24 had not. They were rows still at
+low opacity. This is the *second* time this audit has mis-read a fade as a contrast defect, and the note
+added after the first time was wrong: it said `prefers-reduced-motion` was enough. It is not. Motion's
+`reducedMotion="user"` drops transforms and **keeps opacity on purpose**, because a fade is not a
+vestibular trigger — so the stagger plays for everybody, including a user who asked for less motion.
+
+Measured on `/news`, `REDUCED=1`:
+
+| settle | before | after |
+|---|---|---|
+| 1500 ms | **18 violations** | 0 |
+| 2500 ms | 0 | 0 |
+| 5000 ms | 0 | 0 |
+
+**Fix.** `staggerGap(gap, count)` in `src/components/motion/tokens.ts` bounds the *total* entrance to
+`STAGGER_BUDGET` (0.4 s) instead of capping the number of animated items: short lists keep the gap they
+asked for, long ones compress, and no list has an invisible tail. Applied inside `Stagger` and
+`AnimatedList`, so all 16 call sites are covered and none of them has to know how long its list is.
+
+**Regression tests** — five in `tests/ux-coherence.test.ts`: the short-list identity, the bound holding
+at 50/120/500/5000 items, the `/news` arithmetic specifically (2.38 s → 0.40 s), the degenerate cases,
+and one asserting both primitives actually call it. All five fail against the unfixed code.
+
+**Also fixed:** `scripts/a11y-audit.mjs` now explains this, and its Chromium lookup no longer guesses a
+single path — it died with `spawn ENOTDIR` on a container where `$PLAYWRIGHT_BROWSERS_PATH/chromium` is
+a symlink to the binary rather than to a directory, and now tries the known layouts and reports what it
+looked for.
 
 ---
 

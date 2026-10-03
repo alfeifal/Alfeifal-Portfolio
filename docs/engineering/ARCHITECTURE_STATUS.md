@@ -124,14 +124,22 @@ the six at realistic row counts, and add the index where a sequential scan actua
 ## Accessibility
 
 Measured in a real browser with axe-core 4.10.2 over 25 routes, not inferred from the source:
-`scripts/a11y-audit.mjs`. As of phase 3.24, **zero violations** at WCAG 2.0/2.1/2.2 A+AA plus axe's
-best-practice rules, in three configurations — light 1280×900, light 375×812, dark 1280×900 — with no
-horizontal overflow on any route at phone width.
+`scripts/a11y-audit.mjs`. **Zero violations** at WCAG 2.0/2.1/2.2 A+AA plus axe's best-practice rules,
+in three configurations — light 1280×900, light 375×812, dark 1280×900 — with no horizontal overflow on
+any route at phone width. Established in 3.24 and **re-measured in 3.27** after 3.26 changed the route
+group's layout: 25 routes × 3 configurations, 75 pairs, zero. The dark run confirms the theme was
+actually applied on all 25, so a silent failure to apply it cannot pass as a clean result.
+
+3.27 also audited **`/admin` as a real administrator for the first time** — 3.24's account was an
+ordinary user, so that route had only ever been measured as the not-found page.
 
 What the audit established beyond the violation count:
 
-- **`prefers-reduced-motion` is honoured.** Emulating it removed 18 apparent contrast failures that
-  were opacity frames of a list fading in. Previously this was assumed from media queries existing.
+- **`prefers-reduced-motion` is honoured for transforms, and deliberately not for opacity.** Motion's
+  `reducedMotion="user"` drops movement and keeps fades, because a fade is not a vestibular trigger.
+  3.24 recorded only the first half of that and concluded the emulation was sufficient; 3.27 found the
+  rest when a 120-item list was still fading at 1.5 s (BUG-020). Entrances are now bounded to ~0.4 s
+  regardless of list length, which is both the UX fix and what makes the audit's timing honest.
 - **Colour is tokenised and the tokens now encode the contrast.** `--muted` and `--warning-ink` clear
   4.5:1 against `--surface`, `--surface-2` and `--bg` in both themes, and `tests/ux-coherence.test.ts`
   computes the WCAG ratio from the declared values so a token edit cannot quietly drop below it.
@@ -258,9 +266,10 @@ because an item that disappears from a list is indistinguishable from one that w
 ### Closed in 3.26
 
 8. ~~**The CSRF rule is implemented twice**~~ — it is implemented once, in `server/security/origin.ts`,
-   and `src/proxy.ts` imports it. The two copies had already drifted in two ways, one of which answered
-   **500** to a malformed `Referer` instead of 403 (BUG-018). Eight tests now assert both call paths
-   agree, case by case.
+   and `src/proxy.ts` imports it. The two copies had already drifted in two ways (BUG-018), one of them
+   a predicate that *threw* where it should have returned false — latent rather than live, because the
+   edge copy rejected those same requests first, which is the register entry's point. Eight tests now
+   assert both call paths agree, case by case.
 9. ~~**`notFound()` answers 200 app-wide**~~ — it was not app-wide and not inherent to Next.js: one
    `loading.tsx` above the route group flushed the response before any page body could set a status
    (BUG-005). The guard that has to set the status moved into the layout, which runs before the flush,

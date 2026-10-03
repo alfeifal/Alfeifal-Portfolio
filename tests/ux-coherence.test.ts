@@ -381,3 +381,60 @@ describe("a list only contains list items", () => {
     }
   });
 });
+
+/**
+ * Phase 3.27 — a list's entrance is bounded, not as long as the list.
+ *
+ * `/news` asks for 120 items and staggers them 20 ms apart, so the last row only began fading in at
+ * 2.4 s. Two separate axe runs read that as a defect: a sample at 1.5 s reported 18 colour-contrast
+ * failures that were simply rows still at low opacity. The page was never broken — but a row that takes
+ * two and a half seconds to become readable contradicts the rule this motion language sets for itself
+ * ("fast, natural, unnoticeable"), and it is the same unbounded shape as BUG-016.
+ *
+ * `prefers-reduced-motion` does not help: Motion's `reducedMotion="user"` drops transforms and keeps
+ * opacity on purpose, because a fade is not a vestibular trigger. So this played for everybody.
+ *
+ * Measured in a browser, `/news` at `SETTLE=1500`: **18 violations before, 0 after**, and 0 at every
+ * longer settle both before and after. The whole 25-route audit is 0 in light, dark and at phone width.
+ */
+describe("a list's entrance is bounded by time, not by its length", () => {
+  it("leaves a short list exactly as it asked", async () => {
+    const { STAGGER, staggerGap, STAGGER_BUDGET } = await import("@/components/motion/tokens");
+    // 8 rows at 50 ms is 350 ms for the last one — inside the budget, so nothing is compressed.
+    expect(staggerGap(STAGGER.base, 8)).toBe(STAGGER.base);
+    expect(7 * STAGGER.base).toBeLessThanOrEqual(STAGGER_BUDGET);
+  });
+
+  it("compresses a long list so the last item still starts inside the budget", async () => {
+    const { staggerGap, STAGGER_BUDGET } = await import("@/components/motion/tokens");
+    for (const count of [50, 120, 500, 5000]) {
+      const gap = staggerGap(0.02, count);
+      expect((count - 1) * gap, `${count} items`).toBeLessThanOrEqual(STAGGER_BUDGET + 1e-9);
+    }
+  });
+
+  it("the /news case specifically: 120 items no longer takes 2.4 seconds", async () => {
+    const { staggerGap } = await import("@/components/motion/tokens");
+    const before = 119 * 0.02;
+    const after = 119 * staggerGap(0.02, 120);
+    expect(before).toBeCloseTo(2.38, 2);
+    expect(after).toBeCloseTo(0.4, 2);
+  });
+
+  it("is a no-op for the degenerate cases rather than dividing by zero", async () => {
+    const { staggerGap } = await import("@/components/motion/tokens");
+    expect(staggerGap(0.05, 1)).toBe(0.05);
+    expect(staggerGap(0.05, 0)).toBe(0.05);
+    expect(staggerGap(0, 100)).toBe(0);
+  });
+
+  it("both staggering primitives actually use it", () => {
+    // A helper nothing calls is not a fix. Both read their child count and pass the bounded gap.
+    const src = readFileSync(join(process.cwd(), "src/components/motion/index.tsx"), "utf8");
+    const uses = src.match(/staggerGap\(/g) ?? [];
+    expect(uses.length, "Stagger and AnimatedList").toBe(2);
+    expect(src).toContain("Children.count(children)");
+    expect(src).not.toMatch(/staggerChildren:\s*gap\b/);
+    expect(src).not.toMatch(/staggerChildren:\s*STAGGER\.\w+\s*\}/);
+  });
+});
