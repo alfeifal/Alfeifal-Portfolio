@@ -58,6 +58,7 @@ a CI measurement only**; the local cluster is still 16.
 | A guarded page answers 404, not 200 | `GET /admin` as a signed-in non-administrator → 404, admin → 200, `/tasks` → 200, unmatched path → 404 |
 | A forged `x-pos-pathname` header changes nothing | both directions probed |
 | A list's entrance is bounded | `/news` at `SETTLE=1500`: 18 contrast nodes before, 0 after |
+| A conversation that has read feed text cannot write without the user (SEC-007) | seven tests, including one across two turns through the real agent loop with a scripted client; three fail against the ungated code |
 | The same-origin rule's route-level throw was **not reachable over HTTP** | every malformed-header shape answers 403 at the edge; see BUG-018 |
 
 ### Verified on a disposable database only
@@ -91,7 +92,7 @@ BUG-012.
 |---|---|
 | A real production backup exists | `DATABASE_URL` + `BACKUP_PASSPHRASE` in GitHub |
 | The assistant behaves as described against a real model | `ANTHROPIC_API_KEY` |
-| SEC-007's prompt-injection mitigation works | the same key; it is an instruction to a model and has never met one |
+| SEC-007's **labelling** is obeyed by a model | the same key; it is an instruction and has never met one. Its **enforcement** half needs no model and is verified locally — see below |
 | Native tool search (3.17) | the same key; the flag path has never met a provider |
 | Vercel's `CRON_SECRET` is set | access to Vercel's environment variables |
 

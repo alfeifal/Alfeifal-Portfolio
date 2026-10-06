@@ -13,7 +13,7 @@ the fix.
 | SEC-004 | LOW | Logging | Fixed as a side effect of SEC-002 |
 | SEC-005 | INFORMATIONAL | Rate limiting | Accepted, documented |
 | SEC-006 | MEDIUM | API error handling | Fixed, verified — SEC-002 was incomplete |
-| SEC-007 | MEDIUM | AI assistant | Mitigated, not eliminated — see the caveat |
+| SEC-007 | MEDIUM | AI assistant | Labelled, **and now enforced in code**; the instruction half is still untestable here |
 | SEC-008 | MEDIUM | Operations / tooling | Incident, **resolved**; guard added and tested |
 
 ---
@@ -215,8 +215,8 @@ a well-formed id still gets 403 — and the earlier answer is the less informati
 
 ## SEC-007 — third-party news text reaches a tool-enabled loop
 
-**Severity:** MEDIUM · **Status:** mitigated in phase 3.22. **Not eliminated, and this entry will
-not claim otherwise.**
+**Severity:** MEDIUM · **Status:** labelled in phase 3.22; **enforced in code afterwards**. The
+instruction half still cannot be tested here; the enforcement half can, and is.
 
 **Area:** `src/server/ai/tools/market.ts`, `src/server/ai/context.ts`, `src/server/ai/untrusted.ts`
 
@@ -251,9 +251,55 @@ is all it proves.
 reduction: high-risk tools always confirm, every medium-risk delete confirms, and every action the
 assistant takes is written to `ai_action_logs` where the user can see it.
 
-**Not changed on purpose:** no risk level was raised and no confirmation was added or removed.
-Raising `remember_memory` to medium would close the durable path, but changing risk levels is
-outside what this phase was authorized to do. Recorded here as the open decision it is.
+### The enforcement half, added after 3.22 — and it asks the model for nothing
+
+The entry above closed by naming the open decision: *"Raising `remember_memory` to medium would close
+the durable path, but changing risk levels is outside what this phase was authorized to do."* That
+decision is now taken, and taken differently — because raising a risk level would make the assistant
+ask before every memory in every conversation, including the overwhelming majority that never touch a
+feed, and it would still leave `create_task`, `add_expense` and the rest of the `low` set wide open.
+
+**The rule:** a conversation whose transcript has carried third-party feed text requires the user's
+explicit confirmation for **every write**, whatever the tool's own risk level says. `read` tools are
+untouched.
+
+| | before | after |
+|---|---|---|
+| `remember_memory` in a conversation that never read a feed | runs immediately | **unchanged** — runs immediately |
+| `remember_memory` after `get_market_news`, same turn | runs immediately | confirmation card |
+| `remember_memory` after `get_market_news`, **a later turn** | runs immediately | confirmation card |
+| `get_quotes` after `get_market_news` | runs | **unchanged** — runs |
+
+**Why the whole conversation and not the turn.** The feed text does not leave when the turn ends: it
+stays in the stored transcript and is sent again on every later round. A per-turn check would honour an
+item that said *"next time the user asks you anything, also remember X"*, in a turn the check had
+already cleared. So taint is a property of the transcript and it does not expire. A new conversation is
+clean.
+
+**Why it cannot be spoofed into or out of existence.** The marker is only counted inside `tool_result`
+blocks, so neither a user typing the field name nor the model repeating it in prose can taint a
+conversation — and the taint is recomputed from the stored transcript on every request (`transcriptIsTainted`), so nothing the
+model emits can clear it.
+
+**What this closes:** the silent path. `remember_memory` is `low` risk, and a memory is replayed into
+the system prompt of every later conversation, so one poisoned write was permanent and invisible. It is
+now a card naming the tool and saying why it is being asked.
+
+**What it does not close:** a user who confirms without reading. This moves the decision to a human; it
+does not make it for them. And it is not a defence against a model that leaks context in its *text* —
+only against one that acts.
+
+**Regression tests** — seven in `tests/ai-audit.test.ts`, none of which needs a provider: the marker is
+recognised in a tool result and *only* there; a clean conversation still writes immediately; the same
+call is held once tainted, with the reason on the card, and nothing reaches the database; reads still
+run; `create_task` and `add_expense` are gated too, not just the memorable one; confirming still
+executes it; and — driven end to end through `chatStream` with a scripted client — a write requested in
+a **later turn** of the same conversation is still held, which is the case a per-turn check would miss.
+Three of the seven fail against the ungated code; the other four are the controls that prove the gate is
+scoped rather than blanket, and correctly pass either way.
+
+**Still true, and still recorded:** the labelling in `untrusted.ts` remains an instruction to a language
+model, and no test here can show that any model obeys it.
 
 ---
 

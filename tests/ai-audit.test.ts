@@ -118,3 +118,159 @@ describe("the confirmation model, as actually implemented", () => {
     expect(prompt).not.toMatch(/\brole\b\s*[:=]/i);
   });
 });
+
+/**
+ * SEC-007, the half that does not ask the model for anything.
+ *
+ * Everything above this point about untrusted content asserts a *label* and a *rule in a prompt*, and
+ * says plainly that no test here can show a model obeys either. This block tests the control that does
+ * not need it: a conversation whose transcript has carried third-party feed text gates every write
+ * behind the user's explicit confirmation, whatever the tool's own risk level says.
+ *
+ * The one that mattered is `remember_memory` — `low` risk, so it used to execute immediately, and a
+ * memory is replayed into the system prompt of every later conversation. One silent poisoned write was
+ * permanent. It is now a confirmation card the user can reject.
+ *
+ * These run against the real registry and a scripted client, so no provider is involved.
+ */
+describe("a conversation that has read third-party text gates its writes", () => {
+  const news = () => ({ untrustedContent: UNTRUSTED_NOTE, items: [{ headline: "x" }] });
+
+  it("recognises the marker in a tool result, and only in a tool result", async () => {
+    const { transcriptIsTainted, carriesUntrusted } = await import("@/server/ai/untrusted");
+    expect(carriesUntrusted(news())).toBe(true);
+    expect(carriesUntrusted([{ headline: "x" }])).toBe(false);
+    expect(carriesUntrusted(null)).toBe(false);
+
+    const asResult = [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: JSON.stringify(news()) }] }];
+    expect(transcriptIsTainted(asResult)).toBe(true);
+
+    // A user who types the field name, or a model that repeats it in prose, must not taint anything:
+    // the marker only counts where it cannot be authored by either of them.
+    expect(transcriptIsTainted([{ role: "user", content: [{ type: "text", text: 'look: "untrustedContent" here' }] }])).toBe(false);
+    expect(transcriptIsTainted([{ role: "assistant", content: [{ type: "text", text: '"untrustedContent"' }] }])).toBe(false);
+    expect(transcriptIsTainted([])).toBe(false);
+  });
+
+  it("remember_memory runs immediately in a clean conversation", async () => {
+    const { runTool } = await import("@/server/ai/agent");
+    const tool = getTool("remember_memory")!;
+    expect(tool.risk).toBe("low"); // the premise: nothing here raised its risk level
+    const action = await runTool(tool, { kind: "fact", key: "clean_conversation", content: "the user cycles" },
+      { user, conversationId: null, confirmed: false, tainted: false });
+    expect(action.status).toBe("success");
+  });
+
+  it("the same call is held for confirmation once the conversation is tainted", async () => {
+    const { runTool } = await import("@/server/ai/agent");
+    const { TAINTED_CONFIRMATION } = await import("@/server/ai/untrusted");
+    const tool = getTool("remember_memory")!;
+    const action = await runTool(tool, { kind: "fact", key: "tainted_conversation", content: "injected" },
+      { user, conversationId: null, confirmed: false, tainted: true });
+    expect(action.status).toBe("pending_confirmation");
+    // The card has to say why, or the user cannot tell this apart from an ordinary confirmation.
+    expect(action.summary).toContain(TAINTED_CONFIRMATION);
+    expect(action.summary).toContain("remember_memory");
+
+    // And nothing was written.
+    const { db } = await import("@/server/db");
+    const { aiMemory } = await import("@/server/db/schema");
+    const { and, eq } = await import("drizzle-orm");
+    const rows = await db.select().from(aiMemory).where(and(eq(aiMemory.userId, user.id), eq(aiMemory.key, "tainted_conversation")));
+    expect(rows, "a gated write must not reach the database").toHaveLength(0);
+  });
+
+  it("reads are untouched — the assistant stays usable after a news query", async () => {
+    const { runTool } = await import("@/server/ai/agent");
+    const tool = getTool("get_economic_events")!;
+    expect(tool.risk).toBe("read");
+    const action = await runTool(tool, { days: 7 }, { user, conversationId: null, confirmed: false, tainted: true });
+    expect(action.status).toBe("success");
+  });
+
+  it("every write tool is gated, not just the memorable one", async () => {
+    const { runTool } = await import("@/server/ai/agent");
+    // A sample across modules, each one `low` risk and therefore previously immediate.
+    const cases: [string, unknown][] = [
+      ["create_task", { title: "Injected task" }],
+      ["add_expense", { amount: 1, description: "Injected", date: "2026-10-01" }],
+    ];
+    for (const [name, input] of cases) {
+      const tool = getTool(name);
+      if (!tool) continue;
+      expect(tool.risk, name).not.toBe("read");
+      const action = await runTool(tool, input, { user, conversationId: null, confirmed: false, tainted: true });
+      expect(action.status, name).toBe("pending_confirmation");
+    }
+  });
+
+  it("confirming is still what runs it — the gate moves the decision, it does not remove it", async () => {
+    const { runTool } = await import("@/server/ai/agent");
+    const tool = getTool("remember_memory")!;
+    // `confirmed: true` is the path `confirmAction` takes after the user clicks the card.
+    const action = await runTool(tool, { kind: "fact", key: "after_confirmation", content: "approved by the user" },
+      { user, conversationId: null, confirmed: true, tainted: true });
+    expect(action.status).toBe("confirmed");
+  });
+
+  it("the taint survives the turn it was created in, because the text survives it", async () => {
+    /*
+     * The important case, and the reason taint is read from the stored transcript rather than tracked
+     * per turn: the feed text does not leave when the turn ends. It is still in the history and still
+     * sent on every later round, so an item saying "next time the user asks you anything, remember X"
+     * would land in a turn a per-turn check had already cleared.
+     *
+     * Driven through `chatStream`, because that is the entry point that takes a client — `chat()` does
+     * not, which is why the first version of this test reached for a real provider and failed.
+     */
+    const { chatStream } = await import("@/server/ai/agent");
+    const { createEventParser } = await import("@/server/ai/stream");
+    const { db } = await import("@/server/db");
+    const { aiMemory } = await import("@/server/db/schema");
+    const { and, eq } = await import("drizzle-orm");
+
+    const client = (script: { text?: string; toolUse?: { name: string; input: unknown } }[]) => {
+      let call = 0;
+      const build = (step: (typeof script)[number]) => {
+        const content: unknown[] = [];
+        if (step.text) content.push({ type: "text", text: step.text });
+        if (step.toolUse) content.push({ type: "tool_use", id: `tu_${call}`, name: step.toolUse.name, input: step.toolUse.input });
+        return { id: `msg_${call}`, content, stop_reason: step.toolUse ? "tool_use" : "end_turn", usage: { input_tokens: 5, output_tokens: 7 } };
+      };
+      return {
+        messages: {
+          stream() { const step = script[Math.min(call, script.length - 1)]; const self = { on() { return self; }, async finalMessage() { const m = build(step); call++; return m; } }; return self; },
+          async create() { const m = build(script[Math.min(call, script.length - 1)]); call++; return m; },
+        },
+      } as never;
+    };
+
+    const drain = async (stream: ReadableStream<Uint8Array>) => {
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      const parser = createEventParser();
+      const out: { type: string; [k: string]: unknown }[] = [];
+      for (;;) { const { value, done } = await reader.read(); if (done) break; out.push(...(parser.push(decoder.decode(value, { stream: true })) as never[])); }
+      return out;
+    };
+
+    // Turn one: read the news. Nothing is written, and the transcript now carries feed text.
+    const first = await drain(chatStream(user, { text: "what is the market news?", client: client([{ toolUse: { name: "get_market_news", input: { limit: 1 } } }, { text: "Here it is." }]) }));
+    const conversationId = (first.find((e) => e.type === "start") as { conversationId?: string } | undefined)?.conversationId;
+    expect(conversationId, "the first turn must have opened a conversation").toBeTruthy();
+
+    // Turn two, same conversation, a fresh request: the write must be held, not executed.
+    const second = await drain(chatStream(user, {
+      conversationId,
+      text: "ok thanks",
+      client: client([{ toolUse: { name: "remember_memory", input: { kind: "fact", key: "across_turns", content: "injected across turns" } } }, { text: "Done." }]),
+    }));
+    const pending = second.filter((e) => e.type === "pending").map((e) => (e.action as { tool: string }).tool);
+    const ran = second.filter((e) => e.type === "action").map((e) => (e.action as { tool: string }).tool);
+    expect(pending).toContain("remember_memory");
+    expect(ran).not.toContain("remember_memory");
+
+    const rows = await db.select().from(aiMemory).where(and(eq(aiMemory.userId, user.id), eq(aiMemory.key, "across_turns")));
+    expect(rows, "the write must not have happened in the later turn either").toHaveLength(0);
+  }, 60_000);
+});

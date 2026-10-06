@@ -251,10 +251,13 @@ because an item that disappears from a list is indistinguishable from one that w
    `fileParallelism: false`, which is necessary rather than incidental: the tests share one database and
    several assert on counts that are global to it. Making it parallel means a database per file. Not a
    problem at the current duration; the constraint is written down so the reason is not lost.
-5. **The assistant reads third-party text in a loop that can act** (SEC-007). `get_market_news` returns
-   RSS headlines verbatim, and low-risk tools — `remember_memory` among them — execute without a
-   confirmation step. Mitigated by labelling the content and by a system-prompt rule; the mitigation is
-   an instruction to a model and has never been tested against a real one.
+5. **The assistant reads third-party text in a loop that can act** (SEC-007) — now *enforced*, not only
+   labelled. A conversation whose transcript has carried feed text requires the user's confirmation for
+   every write, whatever the tool's own risk level says; reads are untouched and a conversation that
+   never read a feed behaves exactly as before. That control needs nothing from the model and is covered
+   by seven tests, including one driven end to end across two turns. What remains open is narrower and
+   still recorded as open: the labelling in `untrusted.ts` is an instruction to a model, no test here can
+   show a model obeys it, and a user who confirms without reading the card has confirmed it.
 6. **The local development database is PostgreSQL 16; CI and production are 18.** CI was moved to 18 in
    3.26, which is the pairing that matters — but the cluster this project is developed against is now
    the odd one out, and a feature available on 18 and not 16 would fail locally and pass everywhere

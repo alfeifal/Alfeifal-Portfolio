@@ -22,6 +22,10 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
 
 - **Phase 3 — stabilization and consolidation**
 - **Phase 3 is COMPLETE through 3.27**; the SEC-008 incident is closed
+- **SEC-007 is now enforced in code, not only labelled** — a conversation that has read third-party feed
+  text gates every write behind the user. That was the open decision the register itself named, and it
+  was taken differently from the way the register proposed: raising `remember_memory` to medium would
+  have asked in every conversation and still left the rest of the `low` set open.
 - **Next action: phase 4.** Read `RELEASE_READINESS.md` first — it is new in 3.27 and it is the one
   document that says, claim by claim, whether the evidence is local, CI, disposable-database or
   production. Nothing in phase 4 depends on the blocked migrations, but every claim about production
@@ -101,7 +105,7 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
 
 | | |
 |---|---|
-| Full suite | **960 passed / 39 files** (session start: 867 / 36) |
+| Full suite | **972 passed / 39 files** (session start: 867 / 36) |
 | New this session | `tests/concurrency.test.ts` (12), `tests/ai-audit.test.ts` (11), `tests/http-contract.test.ts` (18), 28 in `tests/operations.test.ts`, 11 in `tests/ux-coherence.test.ts`, 10 in `tests/performance.test.ts`; 3 vacuous admin tests replaced by 4 real ones, and 1 brittle source-string test rewritten to call the code |
 | Confirmed to fail against the unfixed code | 6/7 concurrency + the watchlist race (6 lists where 1 is required); AI-001 location; 2/3 AI-002; 4 CI-config, and 2 more for the pinning and the database major; 1 idempotence-claim; 2 supersede; 2 admin-guard; 8 accessibility; 5 of 10 performance; 6 of 10 HTTP-contract; 3 of 8 CSRF-parity |
 | Typecheck / lint / build | clean; 18 pre-existing lint warnings, unchanged |
@@ -147,6 +151,12 @@ the RSS batching) it is written down as unconfirmed, waiting on a deployment.
   statement reused with different periods looks like four duplicates.
 - **`.slice(0, N)` over a query with no `ORDER BY` caps an arbitrary N.** A cap is only a cap if the
   set is ordered; otherwise the output changes between runs for no visible reason.
+- **`chat()` does not take a client; `chatStream()` does.** My first end-to-end injection test reached
+  for a real provider and died behind the sanitised error message. If a test of the agent loop fails
+  with "Something went wrong with this conversation", that is what it means.
+- **A guarantee a model has to cooperate with is not a control.** The useful question about a
+  prompt-injection mitigation is "what does this stop even if the model does exactly what the attacker
+  asked?" — and if the answer is nothing, the mitigation is documentation.
 - **A test that asserts on a line of source is a test of the formatting.** One from 3.23 pinned a
   literal string from `proxy.ts` and broke the moment that rule moved into the module that already
   owned it — the source had changed, the contract had not. Call the thing and assert what it answers.

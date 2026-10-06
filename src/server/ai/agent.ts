@@ -18,6 +18,7 @@ import { asUserFacingAiError, logAiError, safeAiMessage } from "./errors";
 import { assertSendable, blocksOf, repairTranscript, UNKNOWN_RESULT, type Recovered, type Violation } from "./transcript";
 import { toolsForMode } from "./tool-groups";
 import { planTools, toolSearchPromptSection } from "./tool-search";
+import { TAINTED_CONFIRMATION, carriesUntrusted, transcriptIsTainted } from "./untrusted";
 import "./tools"; // registers every tool
 
 const MAX_TOOL_ROUNDS = 8;
@@ -138,7 +139,7 @@ async function history(conversationId: string, limit = HISTORY_LIMIT): Promise<{
   return repairTranscript(raw, { recover: (u) => recovered.get(u.id) });
 }
 
-export async function runTool(tool: ToolDefinition, rawInput: unknown, ctx: { user: SessionUser; conversationId: string | null; messageId?: string | null; confirmed: boolean }): Promise<ExecutedAction> {
+export async function runTool(tool: ToolDefinition, rawInput: unknown, ctx: { user: SessionUser; conversationId: string | null; messageId?: string | null; confirmed: boolean; tainted?: boolean }): Promise<ExecutedAction> {
   const started = Date.now();
   const parsed = tool.schema.safeParse(rawInput);
   if (!parsed.success) {
@@ -150,6 +151,13 @@ export async function runTool(tool: ToolDefinition, rawInput: unknown, ctx: { us
   const confirmMedium = (prefs.ai as { confirmMedium?: boolean } | undefined)?.confirmMedium ?? false;
   let needs: boolean | string = tool.risk === "high";
   if (!needs && tool.risk === "medium") needs = confirmMedium || (tool.needsConfirmation?.(input, { ...ctx }) ?? false);
+  /*
+   * SEC-007, enforced rather than requested. A conversation that has read third-party feed text gates
+   * every write behind the user, whatever the tool's own risk level says — which is the only control
+   * here that does not depend on a model choosing to obey a sentence in its prompt. `read` tools are
+   * deliberately untouched. See `./untrusted.ts` for why the taint is a property of the transcript.
+   */
+  if (!needs && ctx.tainted && tool.risk !== "read") needs = `${TAINTED_CONFIRMATION} Requested: ${tool.summarize?.(input, null) ?? tool.name}`;
   if (needs && !ctx.confirmed) {
     const [log] = await db.insert(aiActionLogs).values({ userId: ctx.user.id, conversationId: ctx.conversationId, messageId: ctx.messageId ?? null, tool: tool.name, risk: tool.risk, params: input, status: "pending_confirmation", summary: typeof needs === "string" ? needs : tool.summarize?.(input, null) ?? tool.name, expiresAt: new Date(Date.now() + PENDING_TTL_MS) }).returning();
     return { logId: log.id, tool: tool.name, module: tool.module, risk: tool.risk, status: "pending_confirmation", summary: log.summary, params: input };
@@ -230,6 +238,15 @@ async function runChat(user: SessionUser, opts: { conversationId?: string | null
   const system = await buildSystemPrompt(user, systemExtra, opts.snapshotSections);
   const { messages: transcript, repaired } = await history(conv.id);
   if (repaired.length) console.warn("[ai] repaired a stored transcript before sending", { conversationId: conv.id, repaired });
+  /*
+   * Has anything in this conversation ever carried third-party text? (SEC-007.)
+   *
+   * Read from the stored transcript, not from this turn, because the text stays in the history and is
+   * sent again on every later round — a per-turn check would clear a turn whose history still contains
+   * the crafted item. It is raised again below the moment a tool returns such content, so a write
+   * requested in the *same* round as the news fetch is gated too.
+   */
+  let tainted = transcriptIsTainted(transcript);
   const actions: ExecutedAction[] = [];
   const pending: ExecutedAction[] = [];
   let usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -331,7 +348,9 @@ async function runChat(user: SessionUser, opts: { conversationId?: string | null
         const tool = getTool(tu.name);
         if (!tool) { results.push({ type: "tool_result", tool_use_id: tu.id, is_error: true, content: `Unknown tool ${tu.name}` }); continue; }
         emit({ type: "tool", name: tool.name });
-        const action = await runTool(tool, tu.input, { user, conversationId: conv.id, messageId: assistantMsg.id, confirmed: false });
+        const action = await runTool(tool, tu.input, { user, conversationId: conv.id, messageId: assistantMsg.id, confirmed: false, tainted });
+        // Raised before the next tool in this same round is considered, never after it.
+        if (carriesUntrusted(action.result)) tainted = true;
         if (action.status === "pending_confirmation") {
           pending.push(action);
           emit({ type: "pending", action });
